@@ -1,0 +1,11 @@
+flask
+faster-whisper
+torch
+torchaudio
+transformers
+accelerate
+pyannote.audio
+numpy
+scipy
+huggingface_hub
+python-dotenv
