@@ -1,0 +1,13 @@
+.env
+/test_capture.wav
+/class_test.wav
+/mic_test.wav
+/laptop_mic2.wav
+/laptop_mic1.wav
+/mic_regular.wav
+/mic_echo_cancelled.wav
+/stereo_test.wav
+/temp_left.wav
+/temp_right.wav
+/.claude/
+/recordings/

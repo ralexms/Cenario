@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+# gui/app.py — Flask web interface for Cenario
+
+import os
+import sys
+import json
+import wave
+import threading
+import traceback
+from datetime import datetime
+
+from flask import Flask, render_template, request, jsonify, Response
+
+# Add parent dir to path so we can import core modules
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
+from core.audio_capture import AudioCapture
+from core.transcriber import Transcriber
+from core.exporter import Exporter
+
+app = Flask(__name__)
+
+# --- Recording state ---
+_capture = None
+_transcriber = None  # live transcriber
+_live_queue = []  # list-based for reconnection support
+_live_queue_lock = threading.Lock()
+_stop_event = threading.Event()
+_live_thread = None
+_recording_mode = None
+_output_file = None
+_preview_only = False
+
+# --- Post-processing state ---
+_post = {
+    'status': 'idle',  # idle, transcribing, diarizing, done, error
+    'thread': None,
+    'events': [],  # all progress events (list for reconnection support)
+    'segments': [],  # transcription segments only
+    'result': None,  # final transcription result
+    'file': None,
+    'error': None,
+    'duration': 0,  # audio duration in seconds
+}
+
+
+def _get_hf_token():
+    """Load HuggingFace token from .env file or environment."""
+    token = os.environ.get('HF_TOKEN')
+    if token:
+        return token
+    env_path = os.path.join(BASE_DIR, '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('HF_TOKEN='):
+                    return line.split('=', 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _reset_post_state():
+    """Reset post-processing state for a new run."""
+    _post['status'] = 'idle'
+    _post['events'] = []
+    _post['segments'] = []
+    _post['result'] = None
+    _post['error'] = None
+    _post['duration'] = 0
+
+
+# ---- Routes ----
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/api/sources')
+def api_sources():
+    data = AudioCapture.get_sources_for_gui()
+    return jsonify(data)
+
+
+@app.route('/api/recordings')
+def api_recordings():
+    """List WAV files in recordings directory."""
+    rec_dir = os.path.join(BASE_DIR, 'recordings')
+    if not os.path.exists(rec_dir):
+        return jsonify([])
+    files = []
+    for f in sorted(os.listdir(rec_dir), reverse=True):
+        if f.endswith('.wav'):
+            path = os.path.join(rec_dir, f)
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            files.append({'name': f, 'path': path, 'size_mb': round(size_mb, 1)})
+    return jsonify(files)
+
+
+@app.route('/api/record/start', methods=['POST'])
+def api_record_start():
+    global _capture, _transcriber, _live_thread, _stop_event
+    global _recording_mode, _output_file, _preview_only
+
+    if _capture and _capture.recording_process:
+        return jsonify({'error': 'Recording already in progress'}), 400
+
+    body = request.get_json(force=True)
+    mode = body.get('mode', 'stereo')
+    monitor = body.get('monitor')
+    mic = body.get('mic')
+    live_model = body.get('live_model', 'tiny')
+    chunk_seconds = body.get('chunk', 5)
+    meeting_name = body.get('meeting_name', '').strip()
+    output_folder = body.get('output_folder', '').strip() or 'recordings'
+    _preview_only = body.get('preview_only', False)
+    language = body.get('language') or None
+
+    if mode == 'stereo' and (not monitor or not mic):
+        return jsonify({'error': 'Stereo mode requires both monitor and mic sources'}), 400
+    if mode == 'mono' and not mic:
+        return jsonify({'error': 'Mono mode requires a mic source'}), 400
+
+    # Build output path
+    if os.path.isabs(output_folder):
+        rec_dir = output_folder
+    else:
+        rec_dir = os.path.join(BASE_DIR, output_folder)
+    os.makedirs(rec_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'{meeting_name}_{timestamp}.wav' if meeting_name else f'{timestamp}.wav'
+    _output_file = os.path.join(rec_dir, filename)
+
+    _capture = AudioCapture(sample_rate=16000)
+    _recording_mode = mode
+
+    if mode == 'mono':
+        ok = _capture.start_recording_mono(mic, _output_file)
+    else:
+        ok = _capture.start_recording_stereo(monitor, mic, _output_file)
+
+    if not ok:
+        return jsonify({'error': 'Failed to start recording'}), 500
+
+    # Start live transcription thread
+    _stop_event = threading.Event()
+    with _live_queue_lock:
+        _live_queue.clear()
+
+    _transcriber = Transcriber()
+
+    def on_segment(text, start, end):
+        entry = {'text': text, 'start': start, 'end': end}
+        with _live_queue_lock:
+            _live_queue.append(entry)
+
+    _live_thread = threading.Thread(
+        target=_transcriber.transcribe_live,
+        args=(_capture, live_model, chunk_seconds, _stop_event, on_segment),
+        kwargs={'language': language},
+        daemon=True,
+    )
+    _live_thread.start()
+
+    return jsonify({
+        'status': 'recording', 'file': _output_file,
+        'mode': mode, 'preview_only': _preview_only,
+    })
+
+
+@app.route('/api/record/stop', methods=['POST'])
+def api_record_stop():
+    global _capture, _transcriber, _live_thread, _recording_mode, _output_file, _preview_only
+
+    if not _capture or not _capture.recording_process:
+        return jsonify({'error': 'No recording in progress'}), 400
+
+    _stop_event.set()
+    if _live_thread:
+        _live_thread.join(timeout=10)
+        _live_thread = None
+
+    # Free live transcriber model from GPU before post-processing
+    if _transcriber:
+        _transcriber.unload_model()
+        _transcriber = None
+
+    if _recording_mode == 'mono':
+        _capture.stop_recording_mono()
+    else:
+        _capture.stop_recording_stereo()
+
+    result_file = _output_file
+    was_preview = _preview_only
+    _capture = None
+    _recording_mode = None
+    _preview_only = False
+
+    if was_preview and result_file and os.path.exists(result_file):
+        os.remove(result_file)
+        return jsonify({'status': 'stopped', 'preview_only': True})
+
+    return jsonify({'status': 'stopped', 'file': result_file})
+
+
+@app.route('/api/live')
+def api_live():
+    """SSE stream of live transcription segments. List-based for reconnection."""
+    def generate():
+        pos = 0
+        while True:
+            with _live_queue_lock:
+                new_items = _live_queue[pos:]
+                pos = len(_live_queue)
+
+            for item in new_items:
+                yield f"data: {json.dumps(item)}\n\n"
+
+            if _stop_event.is_set():
+                # Drain remaining
+                with _live_queue_lock:
+                    remaining = _live_queue[pos:]
+                for item in remaining:
+                    yield f"data: {json.dumps(item)}\n\n"
+                yield "data: {\"done\": true}\n\n"
+                break
+
+            import time
+            time.sleep(0.5)
+            yield ": keepalive\n\n"
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+# ---- Post-processing ----
+
+@app.route('/api/postprocess/start', methods=['POST'])
+def api_postprocess_start():
+    if _post['status'] in ('transcribing', 'diarizing'):
+        return jsonify({'error': 'Post-processing already in progress'}), 400
+
+    body = request.get_json(force=True)
+    file_path = body.get('file')
+    model_size = body.get('model', 'small')
+    diarize = body.get('diarize', True)
+    language = body.get('language') or None
+    beam_size = body.get('beam_size', 5)
+    vad_filter = body.get('vad_filter', False)
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': f'File not found: {file_path}'}), 400
+
+    hf_token = _get_hf_token() if diarize else None
+    if diarize and not hf_token:
+        diarize = False
+
+    _reset_post_state()
+    _post['file'] = file_path
+
+    # Get audio duration for progress calculation
+    try:
+        with wave.open(file_path, 'rb') as wf:
+            channels = wf.getnchannels()
+            duration = wf.getnframes() / wf.getframerate()
+        _post['duration'] = duration
+    except Exception as e:
+        return jsonify({'error': f'Cannot read WAV file: {e}'}), 400
+
+    def _emit(event):
+        _post['events'].append(event)
+
+    def run():
+        try:
+            transcriber = Transcriber()
+
+            def on_progress(event):
+                evt_type = event.get('type')
+                if evt_type == 'segment':
+                    _post['segments'].append(event)
+                    _emit(event)
+                elif evt_type == 'transcription_done':
+                    # Save intermediate result before diarization
+                    intermediate = event.get('result')
+                    if intermediate:
+                        _post['result'] = intermediate
+                        base = os.path.splitext(file_path)[0]
+                        try:
+                            Exporter.to_txt(intermediate, base + '_transcription.txt')
+                            Exporter.to_json(intermediate, base + '_transcription.json')
+                            _emit({'type': 'transcription_saved',
+                                   'files': [base + '_transcription.txt',
+                                             base + '_transcription.json']})
+                        except Exception as e:
+                            print(f"Error saving intermediate: {e}")
+                    _emit({'type': 'status', 'status': 'transcription_done'})
+                elif evt_type == 'status':
+                    _post['status'] = event.get('status', _post['status'])
+                    _emit(event)
+                elif evt_type == 'diarize_progress':
+                    _emit(event)
+                elif evt_type == 'warning':
+                    _emit(event)
+
+            _post['status'] = 'transcribing'
+            _emit({'type': 'status', 'status': 'transcribing', 'duration': duration,
+                   'channels': channels, 'diarize': diarize})
+
+            if channels == 2:
+                result = transcriber.transcribe_stereo(
+                    file_path, model_size=model_size,
+                    hf_token=hf_token if diarize else None,
+                    language=language, on_progress=on_progress,
+                    beam_size=beam_size, vad_filter=vad_filter)
+            else:
+                if diarize and hf_token:
+                    result = transcriber.transcribe_with_diarization(
+                        file_path, model_size=model_size, hf_token=hf_token,
+                        language=language, on_progress=on_progress,
+                        beam_size=beam_size, vad_filter=vad_filter)
+                else:
+                    def seg_cb(seg):
+                        on_progress({'type': 'segment', **seg})
+
+                    result = transcriber.transcribe(
+                        file_path, model_size=model_size, language=language,
+                        on_segment=seg_cb, beam_size=beam_size,
+                        vad_filter=vad_filter)
+                    on_progress({'type': 'transcription_done', 'result': result})
+
+            _post['result'] = result
+            _post['status'] = 'done'
+            _emit({'type': 'status', 'status': 'done'})
+
+            transcriber.unload_model()
+
+        except Exception as e:
+            traceback.print_exc()
+            _post['status'] = 'error'
+            _post['error'] = str(e)
+            _emit({'type': 'error', 'message': str(e)})
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    _post['thread'] = t
+
+    return jsonify({'status': 'started', 'file': file_path,
+                    'duration': duration, 'channels': channels})
+
+
+@app.route('/api/postprocess/stream')
+def api_postprocess_stream():
+    """SSE stream for post-processing progress. Reconnection-safe via list-based events."""
+    def generate():
+        pos = 0
+        while True:
+            events = _post['events']
+            if pos < len(events):
+                for event in events[pos:]:
+                    yield f"data: {json.dumps(event)}\n\n"
+                pos = len(events)
+
+                # Check if terminal event was sent
+                last = events[-1]
+                if last.get('status') in ('done', 'error') or last.get('type') == 'error':
+                    break
+            else:
+                import time
+                time.sleep(0.5)
+                yield ": keepalive\n\n"
+
+                # If post-processing finished while we were waiting
+                if _post['status'] in ('done', 'error') and pos >= len(_post['events']):
+                    yield f"data: {json.dumps({'type': 'status', 'status': _post['status']})}\n\n"
+                    if _post['status'] == 'error' and _post['error']:
+                        yield f"data: {json.dumps({'type': 'error', 'message': _post['error']})}\n\n"
+                    break
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/postprocess/status')
+def api_postprocess_status():
+    """Get current post-processing status (non-SSE)."""
+    return jsonify({
+        'status': _post['status'],
+        'file': _post['file'],
+        'error': _post.get('error'),
+        'segments_count': len(_post['segments']),
+        'has_result': _post['result'] is not None,
+        'duration': _post['duration'],
+    })
+
+
+@app.route('/api/export', methods=['POST'])
+def api_export():
+    body = request.get_json(force=True)
+    file_path = body.get('file')
+    fmt = body.get('format', 'all')
+
+    if not file_path:
+        return jsonify({'error': 'No file specified'}), 400
+    if not _post['result']:
+        return jsonify({'error': 'No transcription result available. Run post-processing first.'}), 400
+
+    base_path = os.path.splitext(file_path)[0]
+    exported = []
+    result = _post['result']
+
+    if fmt == 'all':
+        Exporter.export_all(result, base_path)
+        exported = [base_path + ext for ext in ('.txt', '.json', '.srt')]
+    elif fmt == 'txt':
+        Exporter.to_txt(result, base_path + '.txt')
+        exported = [base_path + '.txt']
+    elif fmt == 'json':
+        Exporter.to_json(result, base_path + '.json')
+        exported = [base_path + '.json']
+    elif fmt == 'srt':
+        Exporter.to_srt(result, base_path + '.srt')
+        exported = [base_path + '.srt']
+
+    return jsonify({'status': 'exported', 'files': exported})
+
+
+@app.route('/api/transcriptions')
+def api_transcriptions():
+    """List available transcription JSON files across known directories."""
+    # Scan the default recordings dir plus any custom output folder from the UI
+    dirs_to_scan = set()
+    default_dir = os.path.join(BASE_DIR, 'recordings')
+    dirs_to_scan.add(default_dir)
+
+    # Include the folder from the output folder input if provided
+    folder = request.args.get('folder', '').strip()
+    if folder:
+        if os.path.isabs(folder):
+            dirs_to_scan.add(folder)
+        else:
+            dirs_to_scan.add(os.path.join(BASE_DIR, folder))
+
+    # Also include the folder of the last post-processed file
+    if _post['file']:
+        dirs_to_scan.add(os.path.dirname(_post['file']))
+
+    files = []
+    seen_paths = set()
+    for rec_dir in dirs_to_scan:
+        if not os.path.exists(rec_dir):
+            continue
+        for f in os.listdir(rec_dir):
+            if not f.endswith('.json'):
+                continue
+            path = os.path.join(rec_dir, f)
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            # Quick check: must contain transcription data
+            try:
+                with open(path, 'r', encoding='utf-8') as fh:
+                    data = json.load(fh)
+                if not isinstance(data, dict):
+                    continue
+                if 'segments' not in data and 'left_channel' not in data:
+                    continue
+            except Exception:
+                continue
+            size_kb = os.path.getsize(path) / 1024
+            files.append({'name': f, 'path': path, 'size_kb': round(size_kb, 1)})
+
+    files.sort(key=lambda x: x['name'], reverse=True)
+    return jsonify(files)
+
+
+@app.route('/api/speakers/load', methods=['POST'])
+def api_speakers_load():
+    """Load a transcription JSON and return unique speakers with sample text."""
+    body = request.get_json(force=True)
+    file_path = body.get('file')
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': f'File not found: {file_path}'}), 400
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            transcription = json.load(f)
+    except Exception as e:
+        return jsonify({'error': f'Cannot read JSON: {e}'}), 400
+
+    # Collect all segments (handles both mono and stereo formats)
+    all_segments = []
+    if 'left_channel' in transcription:
+        for seg in transcription.get('left_channel', {}).get('segments', []):
+            all_segments.append(seg)
+        for seg in transcription.get('right_channel', {}).get('segments', []):
+            all_segments.append(seg)
+    else:
+        all_segments = transcription.get('segments', [])
+
+    # Extract unique speakers with sample text
+    speakers = {}
+    for seg in all_segments:
+        spk = seg.get('speaker', '')
+        if not spk:
+            continue
+        if spk not in speakers:
+            speakers[spk] = {'label': spk, 'samples': []}
+        if len(speakers[spk]['samples']) < 3:
+            text = seg.get('text', '').strip()
+            if text:
+                speakers[spk]['samples'].append(text)
+
+    return jsonify({
+        'file': file_path,
+        'speakers': list(speakers.values()),
+        'segment_count': len(all_segments),
+    })
+
+
+@app.route('/api/speakers/rename', methods=['POST'])
+def api_speakers_rename():
+    """Rename speakers in a transcription JSON and re-export all formats."""
+    body = request.get_json(force=True)
+    file_path = body.get('file')
+    mapping = body.get('mapping', {})  # {"SPEAKER_00": "Alice", ...}
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': f'File not found: {file_path}'}), 400
+
+    if not mapping:
+        return jsonify({'error': 'No speaker mapping provided'}), 400
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            transcription = json.load(f)
+    except Exception as e:
+        return jsonify({'error': f'Cannot read JSON: {e}'}), 400
+
+    # Apply renaming to all segments
+    def rename_segments(segments):
+        for seg in segments:
+            spk = seg.get('speaker', '')
+            if spk in mapping and mapping[spk].strip():
+                seg['speaker'] = mapping[spk].strip()
+
+    if 'left_channel' in transcription:
+        rename_segments(transcription.get('left_channel', {}).get('segments', []))
+        rename_segments(transcription.get('right_channel', {}).get('segments', []))
+    else:
+        rename_segments(transcription.get('segments', []))
+
+    # Save updated JSON back to same file
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(transcription, f, indent=2, ensure_ascii=False)
+
+    # Re-export TXT and SRT with same base name
+    # Transcription files are named {base}_transcription.json
+    # Export files are named {base}.txt, {base}.json, {base}.srt
+    if file_path.endswith('_transcription.json'):
+        base_path = file_path[:-len('_transcription.json')]
+    else:
+        base_path = os.path.splitext(file_path)[0]
+
+    exported = [file_path]
+    try:
+        Exporter.to_txt(transcription, base_path + '_transcription.txt')
+        exported.append(base_path + '_transcription.txt')
+    except Exception as e:
+        print(f"Error exporting TXT: {e}")
+
+    try:
+        Exporter.to_srt(transcription, base_path + '_transcription.srt')
+        exported.append(base_path + '_transcription.srt')
+    except Exception as e:
+        print(f"Error exporting SRT: {e}")
+
+    # Also update the in-memory result if it matches
+    if _post['result'] is not None and _post['file']:
+        post_base = os.path.splitext(_post['file'])[0]
+        if base_path == post_base:
+            _post['result'] = transcription
+
+    return jsonify({'status': 'renamed', 'files': exported})
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True, use_reloader=False)

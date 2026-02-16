@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cenario — Meeting Transcription</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            padding: 20px;
+            max-width: 960px;
+            margin: 0 auto;
+        }
+        h1 { color: #e94560; margin-bottom: 20px; }
+        h2 { color: #0f3460; background: #e94560; padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 1em; }
+
+        .card {
+            background: #16213e;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            border: 1px solid #0f3460;
+        }
+        .card-body { padding: 14px; }
+
+        label { display: block; margin-bottom: 4px; font-size: 0.9em; color: #aaa; }
+        select, input[type="number"], input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            margin-bottom: 10px;
+        }
+
+        .row { display: flex; gap: 12px; }
+        .row > div { flex: 1; }
+
+        .radio-group { display: flex; gap: 16px; margin-bottom: 12px; }
+        .radio-group label { display: inline; color: #e0e0e0; cursor: pointer; }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.95em;
+            font-weight: 600;
+        }
+        .btn-start { background: #4caf50; color: #fff; }
+        .btn-stop { background: #e94560; color: #fff; }
+        .btn-action { background: #0f3460; color: #e0e0e0; }
+        .btn-warn { background: #ff9800; color: #fff; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+        .output-area {
+            background: #0d1117;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 10px;
+            height: 220px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .segment { margin-bottom: 4px; }
+        .segment .time { color: #e94560; }
+        .segment .speaker { color: #4caf50; }
+        .segment .text { color: #e0e0e0; }
+        .segment .channel { color: #ff9800; font-size: 0.8em; }
+
+        .status {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            display: inline-block;
+        }
+        .status.recording { background: #4caf50; color: #fff; animation: pulse 1.5s infinite; }
+        .status.idle { background: #555; color: #ccc; }
+        .status.processing { background: #ff9800; color: #fff; animation: pulse 2s infinite; }
+
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #0f3460;
+            border-radius: 3px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .progress-bar .fill {
+            height: 100%;
+            background: #4caf50;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+            width: 0;
+        }
+
+        .checkbox-group { display: flex; gap: 16px; margin-bottom: 10px; }
+        .checkbox-group label { color: #e0e0e0; cursor: pointer; display: inline; }
+
+        .hidden { display: none; }
+
+        .warning { color: #ff9800; margin: 6px 0; font-size: 0.9em; }
+        .error { color: #e94560; margin: 6px 0; font-size: 0.9em; }
+        .success { color: #4caf50; margin: 6px 0; font-size: 0.9em; }
+        .info { color: #aaa; margin: 6px 0; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h1>Cenario</h1>
+
+<!-- Meeting Setup -->
+<div class="card">
+    <h2>Meeting Setup</h2>
+    <div class="card-body">
+        <div class="row">
+            <div>
+                <label for="meetingName">Meeting Name (optional)</label>
+                <input type="text" id="meetingName" placeholder="e.g. standup, sprint-review">
+            </div>
+            <div>
+                <label for="outputFolder">Output Folder</label>
+                <input type="text" id="outputFolder" value="recordings" placeholder="recordings">
+            </div>
+        </div>
+        <div class="row">
+            <div>
+                <label for="language">Language</label>
+                <select id="language">
+                    <option value="">Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="nl">Dutch</option>
+                    <option value="ru">Russian</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="ar">Arabic</option>
+                </select>
+            </div>
+            <div>
+                <div class="radio-group" style="margin-top:22px;">
+                    <label><input type="radio" name="mode" value="stereo" checked onchange="toggleMode()"> Online Meeting (stereo)</label>
+                    <label><input type="radio" name="mode" value="mono" onchange="toggleMode()"> Local Meeting (mono)</label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Source Selection -->
+<div class="card">
+    <h2>Source Selection</h2>
+    <div class="card-body">
+        <div class="row">
+            <div id="monitorGroup">
+                <label for="monitor">Monitor (system audio)</label>
+                <select id="monitor"><option value="">Loading...</option></select>
+            </div>
+            <div>
+                <label for="mic">Microphone</label>
+                <select id="mic"><option value="">Loading...</option></select>
+            </div>
+        </div>
+        <button class="btn-action" onclick="loadSources()">Refresh Sources</button>
+    </div>
+</div>
+
+<!-- Recording -->
+<div class="card">
+    <h2>Recording</h2>
+    <div class="card-body">
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="liveModel">Live Preview Model</label>
+                <select id="liveModel">
+                    <option value="tiny" selected>tiny</option>
+                    <option value="base">base</option>
+                    <option value="small">small</option>
+                    <option value="medium">medium</option>
+                    <option value="large-v3">large-v3</option>
+                </select>
+            </div>
+            <div>
+                <label for="chunkSize">Chunk Size (seconds)</label>
+                <input type="number" id="chunkSize" value="5" min="2" max="30">
+            </div>
+        </div>
+        <div class="controls" style="margin-bottom:12px;">
+            <button id="btnStart" class="btn-start" onclick="startRecording()">Start Recording</button>
+            <button id="btnStartPreview" class="btn-warn" onclick="startRecording(true)">Preview Only</button>
+            <button id="btnStop" class="btn-stop" onclick="stopRecording()" disabled>Stop</button>
+            <span id="statusBadge" class="status idle">Idle</span>
+        </div>
+        <div id="livePreview" class="output-area"></div>
+    </div>
+</div>
+
+<!-- Post-Processing -->
+<div class="card">
+    <h2>Post-Processing</h2>
+    <div class="card-body">
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="postFile">Audio File</label>
+                <select id="postFile"><option value="">Record a meeting first</option></select>
+            </div>
+            <div>
+                <label for="postModel">Model</label>
+                <select id="postModel">
+                    <option value="tiny">tiny</option>
+                    <option value="base">base</option>
+                    <option value="small" selected>small</option>
+                    <option value="medium">medium</option>
+                    <option value="large-v3">large-v3</option>
+                </select>
+            </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="beamSize">Beam Size</label>
+                <input type="number" id="beamSize" value="5" min="1" max="20">
+            </div>
+            <div style="display:flex;gap:16px;align-items:end;padding-bottom:10px;">
+                <label style="margin:0;color:#e0e0e0;cursor:pointer;"><input type="checkbox" id="chkDiarize"> Diarization</label>
+                <label style="margin:0;color:#e0e0e0;cursor:pointer;"><input type="checkbox" id="chkVadFilter"> VAD Filter</label>
+            </div>
+        </div>
+        <div class="controls" style="margin-bottom:8px;">
+            <button id="btnPostStart" class="btn-action" onclick="startPostProcess()">Start Post-Processing</button>
+            <span id="postStatusBadge" class="status idle">Idle</span>
+            <span id="postStatusText" class="info"></span>
+        </div>
+        <div class="progress-bar"><div id="postProgress" class="fill"></div></div>
+        <div id="postOutput" class="output-area"></div>
+        <div id="postWarnings"></div>
+    </div>
+</div>
+
+<!-- Speaker Naming -->
+<div class="card">
+    <h2>Speaker Naming</h2>
+    <div class="card-body">
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="speakerFile">Transcription File</label>
+                <select id="speakerFile"><option value="">No transcriptions found</option></select>
+            </div>
+            <div style="display:flex;align-items:end;padding-bottom:10px;">
+                <button class="btn-action" onclick="loadSpeakers()">Load Speakers</button>
+            </div>
+        </div>
+        <div id="speakerList"></div>
+        <div id="speakerActions" class="hidden" style="margin-top:12px;">
+            <button class="btn-start" onclick="applySpeakerNames()">Apply Names &amp; Re-export</button>
+            <span id="speakerStatus" class="info"></span>
+        </div>
+    </div>
+</div>
+
+<!-- Export -->
+<div class="card">
+    <h2>Export</h2>
+    <div class="card-body">
+        <div class="checkbox-group">
+            <label><input type="checkbox" value="txt" class="exportFmt" checked> TXT</label>
+            <label><input type="checkbox" value="json" class="exportFmt" checked> JSON</label>
+            <label><input type="checkbox" value="srt" class="exportFmt" checked> SRT</label>
+        </div>
+        <button id="btnExport" class="btn-action" onclick="exportFiles()" disabled>Export</button>
+        <div id="exportLinks" style="margin-top:10px;"></div>
+    </div>
+</div>
+
+<script>
+    let currentFile = null;
+    let liveEventSource = null;
+    let postEventSource = null;
+    let postDuration = 0;
+
+    // ---- Helpers ----
+    function getMode() {
+        return document.querySelector('input[name="mode"]:checked').value;
+    }
+
+    function toggleMode() {
+        document.getElementById('monitorGroup').classList.toggle('hidden', getMode() === 'mono');
+    }
+
+    function fmtTime(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }
+
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    function addSegment(container, data) {
+        const div = document.createElement('div');
+        div.className = 'segment';
+        let html = '<span class="time">[' + fmtTime(data.start) + ']</span> ';
+        if (data.channel) {
+            html += '<span class="channel">[' + escapeHtml(data.channel) + ']</span> ';
+        }
+        if (data.speaker) {
+            html += '<span class="speaker">' + escapeHtml(data.speaker) + ':</span> ';
+        }
+        html += '<span class="text">' + escapeHtml(data.text) + '</span>';
+        div.innerHTML = html;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ---- Sources ----
+    async function loadSources() {
+        try {
+            const resp = await fetch('/api/sources');
+            const data = await resp.json();
+
+            const monitorSel = document.getElementById('monitor');
+            const micSel = document.getElementById('mic');
+
+            monitorSel.innerHTML = '';
+            data.monitors.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.device_name;
+                opt.textContent = s.display_name + (s.state === 'RUNNING' ? ' [ACTIVE]' : '');
+                monitorSel.appendChild(opt);
+            });
+            if (!data.monitors.length) monitorSel.innerHTML = '<option value="">No monitors found</option>';
+
+            micSel.innerHTML = '';
+            data.inputs.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.device_name;
+                opt.textContent = s.display_name + (s.state === 'RUNNING' ? ' [ACTIVE]' : '');
+                micSel.appendChild(opt);
+            });
+            if (!data.inputs.length) micSel.innerHTML = '<option value="">No inputs found</option>';
+        } catch (e) {
+            console.error('Failed to load sources:', e);
+        }
+    }
+
+    async function loadRecordings() {
+        try {
+            const resp = await fetch('/api/recordings');
+            const files = await resp.json();
+            const sel = document.getElementById('postFile');
+            sel.innerHTML = '';
+            if (!files.length) {
+                sel.innerHTML = '<option value="">No recordings found</option>';
+                return;
+            }
+            files.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.path;
+                opt.textContent = f.name + ' (' + f.size_mb + ' MB)';
+                sel.appendChild(opt);
+            });
+            // Select current file if set
+            if (currentFile) {
+                sel.value = currentFile;
+            }
+        } catch (e) {
+            console.error('Failed to load recordings:', e);
+        }
+    }
+
+    // ---- Recording ----
+    async function startRecording(previewOnly = false) {
+        const mode = getMode();
+        const monitor = document.getElementById('monitor').value;
+        const mic = document.getElementById('mic').value;
+        const liveModel = document.getElementById('liveModel').value;
+        const chunk = parseInt(document.getElementById('chunkSize').value) || 5;
+        const meetingName = document.getElementById('meetingName').value;
+        const outputFolder = document.getElementById('outputFolder').value;
+        const language = document.getElementById('language').value;
+
+        const body = {
+            mode, mic, live_model: liveModel, chunk,
+            meeting_name: meetingName, output_folder: outputFolder,
+            preview_only: previewOnly, language,
+        };
+        if (mode === 'stereo') body.monitor = monitor;
+
+        try {
+            const resp = await fetch('/api/record/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                alert(data.error || 'Failed to start recording');
+                return;
+            }
+
+            currentFile = data.file;
+            document.getElementById('btnStart').disabled = true;
+            document.getElementById('btnStartPreview').disabled = true;
+            document.getElementById('btnStop').disabled = false;
+
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = previewOnly ? 'Preview' : 'Recording';
+            badge.className = 'status recording';
+
+            document.getElementById('livePreview').innerHTML = '';
+            startLiveSSE();
+
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    }
+
+    function startLiveSSE() {
+        if (liveEventSource) liveEventSource.close();
+        liveEventSource = new EventSource('/api/live');
+
+        liveEventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.done) {
+                liveEventSource.close();
+                liveEventSource = null;
+                return;
+            }
+            addSegment(document.getElementById('livePreview'), data);
+        };
+
+        liveEventSource.onerror = function() {
+            liveEventSource.close();
+            liveEventSource = null;
+        };
+    }
+
+    async function stopRecording() {
+        try {
+            const resp = await fetch('/api/record/stop', { method: 'POST' });
+            const data = await resp.json();
+
+            document.getElementById('btnStart').disabled = false;
+            document.getElementById('btnStartPreview').disabled = false;
+            document.getElementById('btnStop').disabled = true;
+
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = 'Idle';
+            badge.className = 'status idle';
+
+            if (liveEventSource) { liveEventSource.close(); liveEventSource = null; }
+
+            if (data.preview_only) {
+                currentFile = null;
+            } else {
+                currentFile = data.file;
+                loadRecordings();
+            }
+
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    }
+
+    // ---- Post-Processing ----
+    async function startPostProcess() {
+        const fileSel = document.getElementById('postFile');
+        const file = fileSel.value;
+        if (!file) {
+            alert('Select an audio file first');
+            return;
+        }
+
+        const model = document.getElementById('postModel').value;
+        const diarize = document.getElementById('chkDiarize').checked;
+        const language = document.getElementById('language').value;
+
+        document.getElementById('postOutput').innerHTML = '';
+        document.getElementById('postWarnings').innerHTML = '';
+        document.getElementById('postProgress').style.width = '0%';
+        document.getElementById('btnExport').disabled = true;
+
+        const badge = document.getElementById('postStatusBadge');
+        badge.textContent = 'Processing';
+        badge.className = 'status processing';
+        document.getElementById('postStatusText').textContent = 'Starting...';
+        document.getElementById('btnPostStart').disabled = true;
+
+        try {
+            const resp = await fetch('/api/postprocess/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file, model, diarize, language,
+                    beam_size: parseInt(document.getElementById('beamSize').value) || 5,
+                    vad_filter: document.getElementById('chkVadFilter').checked
+                })
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                badge.textContent = 'Error';
+                badge.className = 'status idle';
+                document.getElementById('postStatusText').textContent = data.error;
+                document.getElementById('btnPostStart').disabled = false;
+                return;
+            }
+
+            postDuration = data.duration || 0;
+            currentFile = file;
+            startPostSSE();
+
+        } catch (e) {
+            badge.textContent = 'Error';
+            badge.className = 'status idle';
+            document.getElementById('postStatusText').textContent = e.message;
+            document.getElementById('btnPostStart').disabled = false;
+        }
+    }
+
+    function startPostSSE() {
+        if (postEventSource) postEventSource.close();
+        postEventSource = new EventSource('/api/postprocess/stream');
+
+        postEventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            handlePostEvent(data);
+        };
+
+        postEventSource.onerror = function() {
+            postEventSource.close();
+            postEventSource = null;
+        };
+    }
+
+    function handlePostEvent(data) {
+        const statusText = document.getElementById('postStatusText');
+        const badge = document.getElementById('postStatusBadge');
+        const output = document.getElementById('postOutput');
+        const progressBar = document.getElementById('postProgress');
+
+        if (data.type === 'segment') {
+            addSegment(output, data);
+            // Update progress from segment end time
+            if (postDuration > 0 && data.end) {
+                const pct = Math.min(100, (data.end / postDuration) * 100);
+                progressBar.style.width = pct + '%';
+            }
+        } else if (data.type === 'diarize_progress') {
+            if (data.total > 0) {
+                const pct = Math.min(100, (data.completed / data.total) * 100);
+                progressBar.style.width = pct + '%';
+                statusText.textContent = 'Diarization: ' + data.step + ' (' + Math.round(pct) + '%)';
+            }
+        } else if (data.type === 'status') {
+            if (data.status === 'transcribing') {
+                statusText.textContent = 'Transcribing' + (data.detail ? ': ' + data.detail : '...');
+            } else if (data.status === 'diarizing') {
+                statusText.textContent = 'Identifying speakers (diarization)...';
+                progressBar.style.width = '0%';
+                progressBar.style.background = '#ff9800';
+            } else if (data.status === 'transcription_done') {
+                statusText.textContent = 'Transcription complete. Intermediate files saved.';
+            } else if (data.status === 'done') {
+                statusText.textContent = 'Done!';
+                badge.textContent = 'Done';
+                badge.className = 'status idle';
+                progressBar.style.width = '100%';
+                progressBar.style.background = '#4caf50';
+                document.getElementById('btnPostStart').disabled = false;
+                document.getElementById('btnExport').disabled = false;
+                loadTranscriptions();
+
+                if (postEventSource) { postEventSource.close(); postEventSource = null; }
+            } else if (data.status === 'error') {
+                badge.textContent = 'Error';
+                badge.className = 'status idle';
+                document.getElementById('btnPostStart').disabled = false;
+
+                if (postEventSource) { postEventSource.close(); postEventSource = null; }
+            }
+        } else if (data.type === 'transcription_saved') {
+            const w = document.getElementById('postWarnings');
+            w.innerHTML += '<div class="success">Intermediate transcription saved: ' +
+                data.files.map(f => escapeHtml(f)).join(', ') + '</div>';
+        } else if (data.type === 'warning') {
+            const w = document.getElementById('postWarnings');
+            w.innerHTML += '<div class="warning">' + escapeHtml(data.message) + '</div>';
+            statusText.textContent = 'Completed with warnings';
+        } else if (data.type === 'error') {
+            statusText.textContent = 'Error: ' + data.message;
+            badge.textContent = 'Error';
+            badge.className = 'status idle';
+            document.getElementById('btnPostStart').disabled = false;
+            const w = document.getElementById('postWarnings');
+            w.innerHTML += '<div class="error">' + escapeHtml(data.message) + '</div>';
+
+            if (postEventSource) { postEventSource.close(); postEventSource = null; }
+        }
+    }
+
+    // ---- Export ----
+    async function exportFiles() {
+        const fileSel = document.getElementById('postFile');
+        const file = fileSel.value || currentFile;
+        if (!file) return;
+
+        const checkboxes = document.querySelectorAll('.exportFmt:checked');
+        const formats = Array.from(checkboxes).map(cb => cb.value);
+
+        if (!formats.length) {
+            alert('Select at least one export format');
+            return;
+        }
+
+        const linksDiv = document.getElementById('exportLinks');
+        linksDiv.innerHTML = '<span class="info">Exporting...</span>';
+
+        try {
+            let allFiles = [];
+            if (formats.length === 3) {
+                const resp = await fetch('/api/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file, format: 'all' })
+                });
+                const data = await resp.json();
+                if (!resp.ok) { linksDiv.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>'; return; }
+                allFiles = data.files || [];
+            } else {
+                for (const f of formats) {
+                    const resp = await fetch('/api/export', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ file, format: f })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) allFiles.push(...(data.files || []));
+                }
+            }
+
+            linksDiv.innerHTML = '<div class="success"><strong>Exported:</strong><br>' +
+                allFiles.map(f => escapeHtml(f)).join('<br>') + '</div>';
+
+        } catch (e) {
+            linksDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
+        }
+    }
+
+    // ---- Speaker Naming ----
+    async function loadTranscriptions() {
+        try {
+            const folder = document.getElementById('outputFolder').value || 'recordings';
+            const resp = await fetch('/api/transcriptions?folder=' + encodeURIComponent(folder));
+            const files = await resp.json();
+            const sel = document.getElementById('speakerFile');
+            sel.innerHTML = '';
+            if (!files.length) {
+                sel.innerHTML = '<option value="">No transcriptions found</option>';
+                return;
+            }
+            files.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.path;
+                opt.textContent = f.name + ' (' + f.size_kb + ' KB)';
+                sel.appendChild(opt);
+            });
+        } catch (e) {
+            console.error('Failed to load transcriptions:', e);
+        }
+    }
+
+    async function loadSpeakers() {
+        const file = document.getElementById('speakerFile').value;
+        if (!file) {
+            alert('Select a transcription file first');
+            return;
+        }
+
+        const listDiv = document.getElementById('speakerList');
+        const actionsDiv = document.getElementById('speakerActions');
+        listDiv.innerHTML = '<span class="info">Loading...</span>';
+        actionsDiv.classList.add('hidden');
+        document.getElementById('speakerStatus').textContent = '';
+
+        try {
+            const resp = await fetch('/api/speakers/load', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file })
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                listDiv.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
+                return;
+            }
+
+            if (!data.speakers.length) {
+                listDiv.innerHTML = '<span class="info">No speaker labels found in this transcription.</span>';
+                return;
+            }
+
+            let html = '<table style="width:100%;border-collapse:collapse;">';
+            html += '<tr style="border-bottom:1px solid #0f3460;"><th style="text-align:left;padding:6px;color:#aaa;">Speaker Label</th><th style="text-align:left;padding:6px;color:#aaa;">Sample Text</th><th style="text-align:left;padding:6px;color:#aaa;">Name</th></tr>';
+            data.speakers.forEach(spk => {
+                const samples = spk.samples.map(s => escapeHtml(s)).join('<br>');
+                html += '<tr style="border-bottom:1px solid #0f3460;">';
+                html += '<td style="padding:6px;color:#e94560;white-space:nowrap;vertical-align:top;">' + escapeHtml(spk.label) + '</td>';
+                html += '<td style="padding:6px;font-size:0.85em;color:#aaa;vertical-align:top;">' + samples + '</td>';
+                html += '<td style="padding:6px;vertical-align:top;"><input type="text" class="speaker-name" data-label="' + escapeHtml(spk.label) + '" placeholder="' + escapeHtml(spk.label) + '" style="margin:0;width:150px;"></td>';
+                html += '</tr>';
+            });
+            html += '</table>';
+            listDiv.innerHTML = html;
+            actionsDiv.classList.remove('hidden');
+
+        } catch (e) {
+            listDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
+        }
+    }
+
+    async function applySpeakerNames() {
+        const file = document.getElementById('speakerFile').value;
+        if (!file) return;
+
+        const inputs = document.querySelectorAll('.speaker-name');
+        const mapping = {};
+        inputs.forEach(inp => {
+            const label = inp.dataset.label;
+            const name = inp.value.trim();
+            if (name) mapping[label] = name;
+        });
+
+        if (!Object.keys(mapping).length) {
+            alert('Enter at least one speaker name');
+            return;
+        }
+
+        const statusEl = document.getElementById('speakerStatus');
+        statusEl.textContent = 'Applying...';
+
+        try {
+            const resp = await fetch('/api/speakers/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file, mapping })
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                statusEl.textContent = '';
+                alert(data.error);
+                return;
+            }
+
+            statusEl.innerHTML = '<span class="success">Updated! Files: ' +
+                data.files.map(f => escapeHtml(f.split('/').pop())).join(', ') + '</span>';
+            loadTranscriptions();
+
+        } catch (e) {
+            statusEl.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    // ---- Check for in-progress post-processing on page load ----
+    async function checkPostStatus() {
+        try {
+            const resp = await fetch('/api/postprocess/status');
+            const data = await resp.json();
+            if (data.status === 'transcribing' || data.status === 'diarizing') {
+                // Reconnect to running post-processing
+                postDuration = data.duration || 0;
+                if (data.file) {
+                    const sel = document.getElementById('postFile');
+                    // Ensure file is in dropdown
+                    let found = false;
+                    for (const opt of sel.options) {
+                        if (opt.value === data.file) { found = true; sel.value = data.file; break; }
+                    }
+                    if (!found) {
+                        const opt = document.createElement('option');
+                        opt.value = data.file;
+                        opt.textContent = data.file.split('/').pop();
+                        sel.appendChild(opt);
+                        sel.value = data.file;
+                    }
+                    currentFile = data.file;
+                }
+
+                const badge = document.getElementById('postStatusBadge');
+                badge.textContent = 'Processing';
+                badge.className = 'status processing';
+                document.getElementById('postStatusText').textContent = 'Reconnecting...';
+                document.getElementById('btnPostStart').disabled = true;
+
+                startPostSSE();
+            } else if (data.status === 'done' && data.has_result) {
+                document.getElementById('btnExport').disabled = false;
+                document.getElementById('postStatusText').textContent = 'Previous result available for export.';
+                if (data.file) currentFile = data.file;
+            }
+        } catch (e) {
+            // Server not running or no previous state
+        }
+    }
+
+    // ---- Init ----
+    loadSources();
+    loadRecordings();
+    loadTranscriptions();
+    checkPostStatus();
+</script>
+
+</body>
+</html>
