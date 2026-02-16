@@ -18,6 +18,7 @@ sys.path.insert(0, BASE_DIR)
 from core.audio_capture import AudioCapture
 from core.transcriber import Transcriber
 from core.exporter import Exporter
+from core.summarizer import Summarizer
 
 app = Flask(__name__)
 
@@ -44,6 +45,17 @@ _post = {
     'duration': 0,  # audio duration in seconds
 }
 
+# --- Summarization state ---
+_summary = {
+    'status': 'idle', # idle, summarizing, done, error
+    'thread': None,
+    'result': None,
+    'error': None,
+    'file': None,
+    'stream_queue': [],
+    'stream_lock': threading.Lock()
+}
+
 
 def _get_hf_token():
     """Load HuggingFace token from .env file or environment."""
@@ -68,6 +80,15 @@ def _reset_post_state():
     _post['result'] = None
     _post['error'] = None
     _post['duration'] = 0
+
+def _reset_summary_state():
+    """Reset summarization state for a new run."""
+    _summary['status'] = 'idle'
+    _summary['result'] = None
+    _summary['error'] = None
+    _summary['file'] = None
+    with _summary['stream_lock']:
+        _summary['stream_queue'] = []
 
 
 # ---- Routes ----
@@ -584,6 +605,141 @@ def api_speakers_rename():
             _post['result'] = transcription
 
     return jsonify({'status': 'renamed', 'files': exported})
+
+
+# ---- Summarization ----
+
+@app.route('/api/summarize/start', methods=['POST'])
+def api_summarize_start():
+    if _summary['status'] == 'summarizing':
+        return jsonify({'error': 'Summarization already in progress'}), 400
+
+    body = request.get_json(force=True)
+    file_path = body.get('file')
+    model_id = body.get('model', 'Qwen/Qwen2.5-0.5B-Instruct')
+    detail_level = body.get('detail_level', 'concise')
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': f'File not found: {file_path}'}), 400
+
+    _reset_summary_state()
+    _summary['file'] = file_path
+    _summary['status'] = 'summarizing'
+
+    def run():
+        summarizer = Summarizer(model_id=model_id)
+        try:
+            # Load transcription
+            with open(file_path, 'r', encoding='utf-8') as f:
+                transcription = json.load(f)
+            
+            # Merge segments
+            from core.exporter import _merge_stereo_segments
+            segments = _merge_stereo_segments(transcription)
+            
+            # Build full text
+            lines = []
+            for seg in segments:
+                speaker = seg.get('speaker', 'UNKNOWN')
+                text = seg.get('text', '').strip()
+                lines.append(f"{speaker}: {text}")
+            full_text = "\n".join(lines)
+            
+            if not full_text.strip():
+                raise ValueError("No text to summarize")
+
+            def stream_cb(chunk):
+                with _summary['stream_lock']:
+                    _summary['stream_queue'].append(chunk)
+
+            # Summarize
+            summary_text = summarizer.summarize(full_text, detail_level=detail_level, stream_callback=stream_cb)
+            _summary['result'] = summary_text
+            
+            # Save summary
+            if file_path.endswith('_transcription.json'):
+                base_path = file_path[:-len('_transcription.json')]
+            else:
+                base_path = os.path.splitext(file_path)[0]
+                
+            summary_path = base_path + '_summary.txt'
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write(summary_text)
+                
+            _summary['status'] = 'done'
+            
+        except Exception as e:
+            traceback.print_exc()
+            _summary['status'] = 'error'
+            _summary['error'] = str(e)
+        finally:
+            summarizer.unload_model()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    _summary['thread'] = t
+
+    return jsonify({'status': 'started', 'file': file_path})
+
+@app.route('/api/summarize/stream')
+def api_summarize_stream():
+    """SSE stream for summarization text generation."""
+    def generate():
+        pos = 0
+        while True:
+            with _summary['stream_lock']:
+                new_items = _summary['stream_queue'][pos:]
+                pos = len(_summary['stream_queue'])
+            
+            for item in new_items:
+                yield f"data: {json.dumps({'text': item})}\n\n"
+
+            if _summary['status'] in ('done', 'error'):
+                # Drain remaining
+                with _summary['stream_lock']:
+                    remaining = _summary['stream_queue'][pos:]
+                for item in remaining:
+                    yield f"data: {json.dumps({'text': item})}\n\n"
+                
+                if _summary['status'] == 'done':
+                    yield f"data: {json.dumps({'done': True})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'error': _summary['error']})}\n\n"
+                break
+
+            import time
+            time.sleep(0.1)
+            yield ": keepalive\n\n"
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+@app.route('/api/summarize/export_markdown', methods=['POST'])
+def api_summarize_export_markdown():
+    body = request.get_json(force=True)
+    text = body.get('text')
+    file_path = body.get('file') # original transcription file path to derive name
+
+    if not text:
+        return jsonify({'error': 'No text to export'}), 400
+    
+    if file_path:
+        if file_path.endswith('_transcription.json'):
+            base_path = file_path[:-len('_transcription.json')]
+        else:
+            base_path = os.path.splitext(file_path)[0]
+        md_path = base_path + '_summary.md'
+    else:
+        # Fallback
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        md_path = os.path.join(BASE_DIR, 'recordings', f'summary_{timestamp}.md')
+
+    try:
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        return jsonify({'status': 'exported', 'file': md_path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

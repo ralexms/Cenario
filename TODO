@@ -1,0 +1,10 @@
+Change output folder box to browse button and allow to select a folder instead of a file. Also add a text box to show the selected folder path.
+Change layout of the page to use tabs (or a similar UI element) to separate different sections of the settings (Recording, Post-Processing, Summarization)
+Grey-out "Diarization" and "VAD filter" buttons for now (they're not working well)
+Change default transcription model to "medium"
+Save each recording and corresponding outputs to separate folders named after the recording meeting name and timestamp. This will also change how the files for transcription and summarization are selected. They should be selected by folder name and the corresponding json file loaded
+keep database of recorded meetings and their corresponding folders, transcription outputs, and summarization outputs. This will allow for easier retrieval and management of past recordings and their associated data.
+Create an interactive calendar from the database that shows time and date of each recording, and allows users to click on a date to view the recordings made on that day, along with their transcriptions and summaries. This will provide a visual way to navigate through past recordings and access their associated data.
+Add light and dark mode themes to the UI, allowing users to switch between them based on their preference.
+Add functionality to pause, stop and continue transcription from previous state. This will allow users to not have to wait for the transcription in a single session.
+Add functionality to compress recorded wav files to save storage space

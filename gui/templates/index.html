@@ -114,6 +114,52 @@
         .error { color: #e94560; margin: 6px 0; font-size: 0.9em; }
         .success { color: #4caf50; margin: 6px 0; font-size: 0.9em; }
         .info { color: #aaa; margin: 6px 0; font-size: 0.9em; }
+
+        /* Tooltip container */
+        .tooltip {
+          position: relative;
+          display: inline-block;
+        }
+
+        /* Tooltip text */
+        .tooltip .tooltiptext {
+          visibility: hidden;
+          width: 200px;
+          background-color: #555;
+          color: #fff;
+          text-align: center;
+          padding: 5px 0;
+          border-radius: 6px;
+
+          /* Position the tooltip text */
+          position: absolute;
+          z-index: 1;
+          bottom: 125%;
+          left: 50%;
+          margin-left: -100px;
+
+          /* Fade in tooltip */
+          opacity: 0;
+          transition: opacity 0.3s;
+        }
+
+        /* Tooltip arrow */
+        .tooltip .tooltiptext::after {
+          content: "";
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          margin-left: -5px;
+          border-width: 5px;
+          border-style: solid;
+          border-color: #555 transparent transparent transparent;
+        }
+
+        /* Show the tooltip text when you mouse over the tooltip container */
+        .tooltip:hover .tooltiptext {
+          visibility: visible;
+          opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -273,6 +319,49 @@
     </div>
 </div>
 
+<!-- Summarization -->
+<div class="card">
+    <h2>Summarization</h2>
+    <div class="card-body">
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="summaryFile">Transcription File</label>
+                <select id="summaryFile"><option value="">No transcriptions found</option></select>
+            </div>
+             <div>
+                <label for="summaryModel">Model</label>
+                <div class="tooltip" style="width:100%">
+                    <select id="summaryModel">
+                        <option value="Qwen/Qwen2.5-0.5B-Instruct" selected>Qwen 2.5 0.5B (Fast, Low VRAM)</option>
+                        <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen 2.5 1.5B (Balanced)</option>
+                        <option value="Qwen/Qwen2.5-3B-Instruct">Qwen 2.5 3B (Better Quality)</option>
+                    </select>
+                    <span class="tooltiptext">0.5B: ~1.5GB VRAM<br>1.5B: ~3.5GB VRAM<br>3B: ~6.5GB VRAM</span>
+                </div>
+            </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="summaryDetail">Detail Level</label>
+                <select id="summaryDetail">
+                    <option value="concise" selected>Concise</option>
+                    <option value="detailed">Detailed</option>
+                    <option value="comprehensive">Comprehensive</option>
+                </select>
+            </div>
+            <div style="display:flex;align-items:end;padding-bottom:10px;">
+                <button id="btnSummarize" class="btn-action" onclick="startSummarization()">Summarize</button>
+            </div>
+        </div>
+        <div id="summaryStatus" class="info"></div>
+        <div id="summaryOutput" class="output-area" style="height: 200px;"></div>
+        <div style="margin-top:10px;">
+             <button id="btnExportMd" class="btn-action" onclick="exportMarkdown()" disabled>Export as Markdown</button>
+             <span id="exportMdStatus" class="info"></span>
+        </div>
+    </div>
+</div>
+
 <!-- Export -->
 <div class="card">
     <h2>Export</h2>
@@ -291,6 +380,7 @@
     let currentFile = null;
     let liveEventSource = null;
     let postEventSource = null;
+    let summaryEventSource = null;
     let postDuration = 0;
 
     // ---- Helpers ----
@@ -672,17 +762,27 @@
             const folder = document.getElementById('outputFolder').value || 'recordings';
             const resp = await fetch('/api/transcriptions?folder=' + encodeURIComponent(folder));
             const files = await resp.json();
-            const sel = document.getElementById('speakerFile');
-            sel.innerHTML = '';
+
+            // Populate Speaker Naming dropdown
+            const speakerSel = document.getElementById('speakerFile');
+            speakerSel.innerHTML = '';
+
+            // Populate Summarization dropdown
+            const summarySel = document.getElementById('summaryFile');
+            summarySel.innerHTML = '';
+
             if (!files.length) {
-                sel.innerHTML = '<option value="">No transcriptions found</option>';
+                speakerSel.innerHTML = '<option value="">No transcriptions found</option>';
+                summarySel.innerHTML = '<option value="">No transcriptions found</option>';
                 return;
             }
+
             files.forEach(f => {
                 const opt = document.createElement('option');
                 opt.value = f.path;
                 opt.textContent = f.name + ' (' + f.size_kb + ' KB)';
-                sel.appendChild(opt);
+                speakerSel.appendChild(opt.cloneNode(true));
+                summarySel.appendChild(opt);
             });
         } catch (e) {
             console.error('Failed to load transcriptions:', e);
@@ -779,6 +879,105 @@
 
         } catch (e) {
             statusEl.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    // ---- Summarization ----
+    async function startSummarization() {
+        const file = document.getElementById('summaryFile').value;
+        if (!file) {
+            alert('Select a transcription file first');
+            return;
+        }
+
+        const model = document.getElementById('summaryModel').value;
+        const detailLevel = document.getElementById('summaryDetail').value;
+
+        const statusDiv = document.getElementById('summaryStatus');
+        const outputDiv = document.getElementById('summaryOutput');
+        const btn = document.getElementById('btnSummarize');
+        const btnExport = document.getElementById('btnExportMd');
+
+        statusDiv.innerHTML = '<span class="status processing">Summarizing...</span>';
+        outputDiv.innerHTML = '';
+        btn.disabled = true;
+        btnExport.disabled = true;
+        document.getElementById('exportMdStatus').textContent = '';
+
+        try {
+            const resp = await fetch('/api/summarize/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file, model, detail_level: detailLevel })
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                statusDiv.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
+                btn.disabled = false;
+                return;
+            }
+
+            // Start SSE stream
+            if (summaryEventSource) summaryEventSource.close();
+            summaryEventSource = new EventSource('/api/summarize/stream');
+
+            summaryEventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.text) {
+                    outputDiv.textContent += data.text;
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                }
+                if (data.done) {
+                    summaryEventSource.close();
+                    summaryEventSource = null;
+                    statusDiv.innerHTML = '<span class="success">Done!</span>';
+                    btn.disabled = false;
+                    btnExport.disabled = false;
+                }
+                if (data.error) {
+                    summaryEventSource.close();
+                    summaryEventSource = null;
+                    statusDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(data.error) + '</span>';
+                    btn.disabled = false;
+                }
+            };
+
+            summaryEventSource.onerror = function() {
+                summaryEventSource.close();
+                summaryEventSource = null;
+                // If we lost connection but didn't get an explicit error, we might be done or failed silently
+                // We can check status one last time or just leave it
+            };
+
+        } catch (e) {
+            statusDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
+            btn.disabled = false;
+        }
+    }
+
+    async function exportMarkdown() {
+        const text = document.getElementById('summaryOutput').textContent;
+        const file = document.getElementById('summaryFile').value;
+        const statusEl = document.getElementById('exportMdStatus');
+
+        if (!text) return;
+
+        try {
+            const resp = await fetch('/api/summarize/export_markdown', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, file })
+            });
+            const data = await resp.json();
+
+            if (resp.ok) {
+                statusEl.innerHTML = '<span class="success">Saved to ' + escapeHtml(data.file) + '</span>';
+            } else {
+                statusEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
+            }
+        } catch (e) {
+            statusEl.innerHTML = '<span class="error">' + escapeHtml(e.message) + '</span>';
         }
     }
 

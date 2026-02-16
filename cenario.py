@@ -11,6 +11,7 @@ from datetime import datetime
 from core.audio_capture import AudioCapture
 from core.transcriber import Transcriber
 from core.exporter import Exporter
+from core.summarizer import Summarizer
 
 
 def _format_time(seconds):
@@ -116,6 +117,44 @@ def _select_mic_source(args):
 
     print(f"\nMic: {mic['display_name']}")
     return mic['device_name']
+
+
+def _run_summarization(result, base_path):
+    """Run summarization on the transcription result."""
+    from core.exporter import _merge_stereo_segments
+    
+    print("\n--- Summarization ---")
+    segments = _merge_stereo_segments(result)
+    
+    # Build full text with speaker labels
+    lines = []
+    for seg in segments:
+        speaker = seg.get('speaker', 'UNKNOWN')
+        text = seg.get('text', '').strip()
+        lines.append(f"{speaker}: {text}")
+    full_text = "\n".join(lines)
+    
+    if not full_text.strip():
+        print("No text to summarize.")
+        return
+
+    summarizer = Summarizer()
+    try:
+        summary = summarizer.summarize(full_text)
+        
+        print("\n=== Summary ===")
+        print(summary)
+        print("================\n")
+        
+        summary_path = base_path + '_summary.txt'
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        print(f"Saved summary: {summary_path}")
+        
+    except Exception as e:
+        print(f"Summarization failed: {e}")
+    finally:
+        summarizer.unload_model()
 
 
 def cmd_sources(args):
@@ -230,6 +269,11 @@ def cmd_record(args):
     # Export
     base_path = os.path.splitext(output_file)[0]
     Exporter.export_all(result, base_path)
+    
+    if args.summarize:
+        transcriber.unload_model()
+        _run_summarization(result, base_path)
+        
     print("\nDone!")
 
 
@@ -269,6 +313,11 @@ def cmd_transcribe(args):
         speaker = seg.get('speaker', '')
         prefix = f"{speaker}: " if speaker else ""
         print(f"[{start} - {end}] {prefix}{seg['text'].strip()}")
+        
+    if args.summarize:
+        transcriber.unload_model()
+        base_path = os.path.splitext(args.file)[0]
+        _run_summarization(result, base_path)
 
 
 def cmd_export(args):
@@ -304,6 +353,10 @@ def cmd_export(args):
         Exporter.to_json(result, base_path + '.json')
     elif fmt == 'srt':
         Exporter.to_srt(result, base_path + '.srt')
+        
+    if args.summarize:
+        transcriber.unload_model()
+        _run_summarization(result, base_path)
 
 
 def main():
@@ -320,6 +373,7 @@ def main():
     common.add_argument('--no-diarize', action='store_true', help='Skip diarization')
     common.add_argument('--beam-size', type=int, default=5, help='Beam size for decoding (default: 5, higher = better but slower)')
     common.add_argument('--vad-filter', action='store_true', help='Enable voice activity detection filtering')
+    common.add_argument('--summarize', action='store_true', help='Summarize the transcription using a local LLM')
 
     # sources
     subparsers.add_parser('sources', help='List audio sources')
