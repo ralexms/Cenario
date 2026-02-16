@@ -160,6 +160,52 @@
           visibility: visible;
           opacity: 1;
         }
+
+        /* Tabs */
+        .tab {
+            overflow: hidden;
+            border: 1px solid #0f3460;
+            background-color: #16213e;
+            border-radius: 6px 6px 0 0;
+            margin-bottom: -1px;
+        }
+
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            color: #aaa;
+            border-radius: 0;
+            margin: 0;
+        }
+
+        .tab button:hover {
+            background-color: #0f3460;
+            color: #e0e0e0;
+        }
+
+        .tab button.active {
+            background-color: #e94560;
+            color: white;
+        }
+
+        .tabcontent {
+            display: none;
+            padding: 6px 12px;
+            border: 1px solid #0f3460;
+            border-top: none;
+            background: #16213e;
+            border-radius: 0 0 6px 6px;
+            margin-bottom: 16px;
+        }
+
+        .tabcontent.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -209,10 +255,17 @@
     </div>
 </div>
 
-<!-- Source Selection -->
-<div class="card">
-    <h2>Source Selection</h2>
+<!-- Tabs -->
+<div class="tab">
+  <button class="tablinks active" onclick="openTab(event, 'Recording')">Recording</button>
+  <button class="tablinks" onclick="openTab(event, 'PostProcessing')">Post-Processing</button>
+  <button class="tablinks" onclick="openTab(event, 'Summarization')">Summarization</button>
+</div>
+
+<!-- Recording Tab -->
+<div id="Recording" class="tabcontent active">
     <div class="card-body">
+        <h3>Source Selection</h3>
         <div class="row">
             <div id="monitorGroup">
                 <label for="monitor">Monitor (system audio)</label>
@@ -223,14 +276,9 @@
                 <select id="mic"><option value="">Loading...</option></select>
             </div>
         </div>
-        <button class="btn-action" onclick="loadSources()">Refresh Sources</button>
-    </div>
-</div>
+        <button class="btn-action" onclick="loadSources()" style="margin-bottom: 20px;">Refresh Sources</button>
 
-<!-- Recording -->
-<div class="card">
-    <h2>Recording</h2>
-    <div class="card-body">
+        <h3>Recording Controls</h3>
         <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="liveModel">Live Preview Model</label>
@@ -257,34 +305,39 @@
     </div>
 </div>
 
-<!-- Post-Processing -->
-<div class="card">
-    <h2>Post-Processing</h2>
+<!-- Post-Processing Tab -->
+<div id="PostProcessing" class="tabcontent">
     <div class="card-body">
         <div class="row" style="margin-bottom:12px;">
             <div>
-                <label for="postFile">Audio File</label>
-                <select id="postFile"><option value="">Record a meeting first</option></select>
+                <label for="postFolder">Select Meeting Folder</label>
+                <select id="postFolder" onchange="loadFilesForFolder()"><option value="">Loading...</option></select>
             </div>
+            <div>
+                <label for="postFile">Audio File</label>
+                <select id="postFile"><option value="">Select a folder first</option></select>
+            </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="postModel">Model</label>
                 <select id="postModel">
                     <option value="tiny">tiny</option>
                     <option value="base">base</option>
-                    <option value="small" selected>small</option>
-                    <option value="medium">medium</option>
+                    <option value="small">small</option>
+                    <option value="medium" selected>medium</option>
                     <option value="large-v3">large-v3</option>
                 </select>
             </div>
-        </div>
-        <div class="row" style="margin-bottom:12px;">
-            <div>
+             <div>
                 <label for="beamSize">Beam Size</label>
                 <input type="number" id="beamSize" value="5" min="1" max="20">
             </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
             <div style="display:flex;gap:16px;align-items:end;padding-bottom:10px;">
-                <label style="margin:0;color:#e0e0e0;cursor:pointer;"><input type="checkbox" id="chkDiarize"> Diarization</label>
-                <label style="margin:0;color:#e0e0e0;cursor:pointer;"><input type="checkbox" id="chkVadFilter"> VAD Filter</label>
+                <label style="margin:0;color:#777;cursor:not-allowed;"><input type="checkbox" id="chkDiarize" disabled> Diarization (Disabled)</label>
+                <label style="margin:0;color:#777;cursor:not-allowed;"><input type="checkbox" id="chkVadFilter" disabled> VAD Filter (Disabled)</label>
             </div>
         </div>
         <div class="controls" style="margin-bottom:8px;">
@@ -295,13 +348,8 @@
         <div class="progress-bar"><div id="postProgress" class="fill"></div></div>
         <div id="postOutput" class="output-area"></div>
         <div id="postWarnings"></div>
-    </div>
-</div>
 
-<!-- Speaker Naming -->
-<div class="card">
-    <h2>Speaker Naming</h2>
-    <div class="card-body">
+        <h3 style="margin-top: 20px;">Speaker Naming</h3>
         <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="speakerFile">Transcription File</label>
@@ -319,9 +367,8 @@
     </div>
 </div>
 
-<!-- Summarization -->
-<div class="card">
-    <h2>Summarization</h2>
+<!-- Summarization Tab -->
+<div id="Summarization" class="tabcontent">
     <div class="card-body">
         <div class="row" style="margin-bottom:12px;">
             <div>
@@ -382,6 +429,23 @@
     let postEventSource = null;
     let summaryEventSource = null;
     let postDuration = 0;
+
+    // ---- Tabs ----
+    function openTab(evt, tabName) {
+        var i, tabcontent, tablinks;
+        tabcontent = document.getElementsByClassName("tabcontent");
+        for (i = 0; i < tabcontent.length; i++) {
+            tabcontent[i].style.display = "none";
+            tabcontent[i].className = tabcontent[i].className.replace(" active", "");
+        }
+        tablinks = document.getElementsByClassName("tablinks");
+        for (i = 0; i < tablinks.length; i++) {
+            tablinks[i].className = tablinks[i].className.replace(" active", "");
+        }
+        document.getElementById(tabName).style.display = "block";
+        document.getElementById(tabName).className += " active";
+        evt.currentTarget.className += " active";
+    }
 
     // ---- Helpers ----
     function getMode() {
@@ -451,28 +515,63 @@
         }
     }
 
-    async function loadRecordings() {
+    async function loadFolders() {
         try {
-            const resp = await fetch('/api/recordings');
-            const files = await resp.json();
-            const sel = document.getElementById('postFile');
-            sel.innerHTML = '';
-            if (!files.length) {
-                sel.innerHTML = '<option value="">No recordings found</option>';
-                return;
-            }
-            files.forEach(f => {
+            const resp = await fetch('/api/folders');
+            const folders = await resp.json();
+            const sel = document.getElementById('postFolder');
+            sel.innerHTML = '<option value="">Select a folder...</option>';
+
+            folders.forEach(f => {
                 const opt = document.createElement('option');
                 opt.value = f.path;
-                opt.textContent = f.name + ' (' + f.size_mb + ' MB)';
+                opt.textContent = f.name;
                 sel.appendChild(opt);
             });
-            // Select current file if set
-            if (currentFile) {
-                sel.value = currentFile;
-            }
         } catch (e) {
-            console.error('Failed to load recordings:', e);
+            console.error('Failed to load folders:', e);
+        }
+    }
+
+    async function loadFilesForFolder() {
+        const folder = document.getElementById('postFolder').value;
+        if (!folder) return;
+
+        try {
+            // We can reuse api_recordings but we need to filter or pass folder param
+            // Actually, let's just use api_transcriptions logic but for wav files?
+            // Or simpler: just list files in that folder via a new call or reuse existing
+            // For now, let's assume we want to list WAV files in that folder.
+            // But wait, api_recordings lists ALL wav files in 'recordings' dir.
+            // We need a way to list files in a specific subfolder.
+            // Let's just use api_transcriptions with folder param to get JSONs,
+            // but for audio file selection we need WAVs.
+            // Let's cheat and use api_transcriptions endpoint logic but for WAVs?
+            // No, let's just reload transcriptions for that folder.
+
+            loadTranscriptions(folder);
+
+            // For the audio file dropdown (postFile), we need to fetch WAVs in that folder.
+            // We don't have an endpoint for that yet.
+            // Let's just assume the user picks the folder and we find the WAV inside?
+            // Or we can add a small endpoint or modify api_recordings.
+            // Let's modify api_recordings to accept a folder param? No, api_recordings is simple.
+            // Let's just use the fact that we save as {folder_name}.wav inside the folder.
+
+            const folderName = folder.split('/').pop();
+            const wavPath = folder + '/' + folderName + '.wav';
+
+            const sel = document.getElementById('postFile');
+            sel.innerHTML = '';
+            const opt = document.createElement('option');
+            opt.value = wavPath;
+            opt.textContent = folderName + '.wav';
+            sel.appendChild(opt);
+
+            currentFile = wavPath;
+
+        } catch (e) {
+            console.error(e);
         }
     }
 
@@ -563,7 +662,7 @@
                 currentFile = null;
             } else {
                 currentFile = data.file;
-                loadRecordings();
+                loadFolders(); // Refresh folders list
             }
 
         } catch (e) {
@@ -678,7 +777,10 @@
                 progressBar.style.background = '#4caf50';
                 document.getElementById('btnPostStart').disabled = false;
                 document.getElementById('btnExport').disabled = false;
-                loadTranscriptions();
+
+                // Refresh transcriptions list
+                const folder = document.getElementById('postFolder').value;
+                if (folder) loadTranscriptions(folder);
 
                 if (postEventSource) { postEventSource.close(); postEventSource = null; }
             } else if (data.status === 'error') {
@@ -757,10 +859,17 @@
     }
 
     // ---- Speaker Naming ----
-    async function loadTranscriptions() {
+    async function loadTranscriptions(folder = null) {
         try {
-            const folder = document.getElementById('outputFolder').value || 'recordings';
-            const resp = await fetch('/api/transcriptions?folder=' + encodeURIComponent(folder));
+            let url = '/api/transcriptions';
+            if (folder) {
+                url += '?folder=' + encodeURIComponent(folder);
+            } else {
+                const outputFolder = document.getElementById('outputFolder').value || 'recordings';
+                url += '?folder=' + encodeURIComponent(outputFolder);
+            }
+
+            const resp = await fetch(url);
             const files = await resp.json();
 
             // Populate Speaker Naming dropdown
@@ -875,7 +984,10 @@
 
             statusEl.innerHTML = '<span class="success">Updated! Files: ' +
                 data.files.map(f => escapeHtml(f.split('/').pop())).join(', ') + '</span>';
-            loadTranscriptions();
+
+            // Refresh transcriptions list
+            const folder = document.getElementById('postFolder').value;
+            if (folder) loadTranscriptions(folder);
 
         } catch (e) {
             statusEl.textContent = 'Error: ' + e.message;
@@ -1025,8 +1137,7 @@
 
     // ---- Init ----
     loadSources();
-    loadRecordings();
-    loadTranscriptions();
+    loadFolders();
     checkPostStatus();
 </script>
 

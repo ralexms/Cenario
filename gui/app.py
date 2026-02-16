@@ -118,6 +118,18 @@ def api_recordings():
             files.append({'name': f, 'path': path, 'size_mb': round(size_mb, 1)})
     return jsonify(files)
 
+@app.route('/api/folders')
+def api_folders():
+    """List subfolders in recordings directory."""
+    rec_dir = os.path.join(BASE_DIR, 'recordings')
+    if not os.path.exists(rec_dir):
+        return jsonify([])
+    folders = []
+    for f in sorted(os.listdir(rec_dir), reverse=True):
+        path = os.path.join(rec_dir, f)
+        if os.path.isdir(path):
+            folders.append({'name': f, 'path': path})
+    return jsonify(folders)
 
 @app.route('/api/record/start', methods=['POST'])
 def api_record_start():
@@ -145,13 +157,16 @@ def api_record_start():
 
     # Build output path
     if os.path.isabs(output_folder):
-        rec_dir = output_folder
+        base_rec_dir = output_folder
     else:
-        rec_dir = os.path.join(BASE_DIR, output_folder)
+        base_rec_dir = os.path.join(BASE_DIR, output_folder)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    folder_name = f'{meeting_name}_{timestamp}' if meeting_name else f'{timestamp}'
+    rec_dir = os.path.join(base_rec_dir, folder_name)
     os.makedirs(rec_dir, exist_ok=True)
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'{meeting_name}_{timestamp}.wav' if meeting_name else f'{timestamp}.wav'
+    filename = f'{folder_name}.wav'
     _output_file = os.path.join(rec_dir, filename)
 
     _capture = AudioCapture(sample_rate=16000)
@@ -265,7 +280,7 @@ def api_postprocess_start():
 
     body = request.get_json(force=True)
     file_path = body.get('file')
-    model_size = body.get('model', 'small')
+    model_size = body.get('model', 'medium') # Default changed to medium
     diarize = body.get('diarize', True)
     language = body.get('language') or None
     beam_size = body.get('beam_size', 5)
@@ -466,6 +481,13 @@ def api_transcriptions():
     # Also include the folder of the last post-processed file
     if _post['file']:
         dirs_to_scan.add(os.path.dirname(_post['file']))
+
+    # Also scan subdirectories of recordings
+    if os.path.exists(default_dir):
+        for item in os.listdir(default_dir):
+            item_path = os.path.join(default_dir, item)
+            if os.path.isdir(item_path):
+                dirs_to_scan.add(item_path)
 
     files = []
     seen_paths = set()
