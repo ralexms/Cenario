@@ -131,6 +131,25 @@ def api_folders():
             folders.append({'name': f, 'path': path})
     return jsonify(folders)
 
+@app.route('/api/browse_folder')
+def api_browse_folder():
+    """Open a folder selection dialog on the server (local machine)."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        root = tk.Tk()
+        root.withdraw() # Hide the main window
+        root.attributes('-topmost', True) # Bring dialog to front
+        
+        folder_path = filedialog.askdirectory(title="Select Output Folder")
+        root.destroy()
+        
+        return jsonify({'path': folder_path})
+    except Exception as e:
+        print(f"Error opening folder dialog: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/record/start', methods=['POST'])
 def api_record_start():
     global _capture, _transcriber, _live_thread, _stop_event
@@ -162,7 +181,11 @@ def api_record_start():
         base_rec_dir = os.path.join(BASE_DIR, output_folder)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    folder_name = f'{meeting_name}_{timestamp}' if meeting_name else f'{timestamp}'
+    
+    # Replace spaces with underscores in meeting name
+    safe_meeting_name = meeting_name.replace(' ', '_')
+    
+    folder_name = f'{safe_meeting_name}_{timestamp}' if safe_meeting_name else f'{timestamp}'
     rec_dir = os.path.join(base_rec_dir, folder_name)
     os.makedirs(rec_dir, exist_ok=True)
 

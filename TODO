@@ -1,13 +1,14 @@
-Change output folder box to browse button and allow to select a folder instead of a file. Also add a text box to show the selected folder path. (Implemented as text input for folder path in GUI)
-[x] Save each recording and corresponding outputs to separate folders named after the recording meeting name and timestamp. This will also change how the files for transcription and summarization are selected. They should be selected by folder name and the corresponding json file loaded
-move "online" and "local meeting" radio buttons to "recording" tab only
-Add "select meeting folder" dropdown from "post-processing" tab to "summarization tab"
-keep database of recorded meetings and their corresponding folders (json maybe?), transcription outputs, and summarization outputs. This will allow for easier retrieval and management of past recordings and their associated data.
-Add functionality to pause, stop and continue transcription from previous state. This will allow users to not have to wait for the transcription in a single session.
-move export box to "post-processing" tab only (make it look like the "export as markdown" button in the "summarization" tab)
-replace spaces in the meeting name with underscores when creating folders and files to avoid issues with file paths. This will ensure that the application can handle meeting names with spaces without encountering errors related to file handling.
+[ ] Change output folder box to browse button and allow to select a folder instead of a file. Also add a text box to show the selected folder path. (Implemented as text input for folder path in GUI)
+        There's still a bug where a linux window first appears to upload a folder, then another window appear to select a folder
+[ ] move "online" and "local meeting" radio buttons to "recording" tab only
+        Move these to the top of the tab, below "source selection"
+[ ] Add "select meeting folder" dropdown from "post-processing" tab to "summarization tab"
+        After selecting a folder, the corresponding "audio file" and "transcription file" dropdowns should be populated with the files in the selected folder.
+[x] replace spaces in the meeting name with underscores when creating folders and files to avoid issues with file paths. This will ensure that the application can handle meeting names with spaces without encountering errors related to file handling.
 low priority (ignore for now):
     Add functionality to compress recorded wav files to save storage space
     Add several color themes for the UI
     Create an interactive calendar from the database that shows time and date of each recording, and allows users to click on a date to view the recordings made on that day, along with their transcriptions and summaries. This will provide a visual way to navigate through past recordings and access their associated data.
     Add light and dark mode themes to the UI, allowing users to switch between them based on their preference.
+    keep database of recorded meetings and their corresponding folders (json maybe?), transcription outputs, and summarization outputs. This will allow for easier retrieval and management of past recordings and their associated data.
+    Add functionality to pause, stop and continue transcription from previous state. This will allow users to not have to wait for the transcription in a single session.
