@@ -11,6 +11,11 @@ PLATFORM = platform.system()  # 'Linux', 'Windows', 'Darwin'
 
 if PLATFORM == 'Windows':
     import sounddevice as sd
+    try:
+        import pyaudiowpatch as pyaudio
+        _HAS_PYAUDIOWPATCH = True
+    except ImportError:
+        _HAS_PYAUDIOWPATCH = False
 
 
 class AudioCapture:
@@ -33,6 +38,7 @@ class AudioCapture:
         # Windows: sounddevice stream references
         self._stream1 = None
         self._stream2 = None
+        self._pyaudio = None  # pyaudiowpatch instance (loopback only)
 
     # ------------------------------------------------------------------ #
     #  Source listing                                                      #
@@ -63,7 +69,7 @@ class AudioCapture:
 
     @staticmethod
     def _list_sources_windows():
-        """List audio devices via sounddevice, preferring WASAPI."""
+        """List audio devices via sounddevice (inputs) and pyaudiowpatch (loopback)."""
         devices = sd.query_devices()
         hostapis = sd.query_hostapis()
 
@@ -87,30 +93,12 @@ class AudioCapture:
             pass
 
         sources = []
+
+        # Input devices (microphones) — via sounddevice
         for i, d in enumerate(devices):
-            # Only include WASAPI devices when available
             if wasapi_idx is not None and d['hostapi'] != wasapi_idx:
                 continue
-
-            if d['max_input_channels'] <= 0:
-                continue
-
-            # PortAudio WASAPI creates loopback input devices with
-            # "[Loopback]" appended to the output device name.
-            is_loopback = '[Loopback]' in d['name']
-
-            if is_loopback:
-                # Strip the "[Loopback]" tag for a cleaner display name
-                clean_name = d['name'].replace('[Loopback]', '').strip()
-                state = 'RUNNING' if clean_name == default_output_name else 'IDLE'
-                sources.append({
-                    'name': f"loopback_{i}",
-                    'description': f"{clean_name} (Loopback)",
-                    'state': state,
-                    'index': i,
-                    'default_samplerate': d['default_samplerate'],
-                })
-            else:
+            if d['max_input_channels'] > 0:
                 state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
                 sources.append({
                     'name': f"input_{i}",
@@ -120,6 +108,39 @@ class AudioCapture:
                     'default_samplerate': d['default_samplerate'],
                 })
 
+        # Loopback devices — via pyaudiowpatch
+        if _HAS_PYAUDIOWPATCH:
+            sources += AudioCapture._list_loopback_pyaudio(default_output_name)
+
+        return sources
+
+    @staticmethod
+    def _list_loopback_pyaudio(default_output_name):
+        """Discover WASAPI loopback devices via pyaudiowpatch."""
+        sources = []
+        p = pyaudio.PyAudio()
+        try:
+            wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        except OSError:
+            p.terminate()
+            return sources
+
+        for i in range(p.get_device_count()):
+            dev = p.get_device_info_by_index(i)
+            if not dev.get('isLoopbackDevice', False):
+                continue
+            name = dev['name']
+            state = 'RUNNING' if name == default_output_name else 'IDLE'
+            sources.append({
+                'name': f"loopback_{i}",
+                'description': f"{name} (Loopback)",
+                'state': state,
+                'index': i,
+                'default_samplerate': dev['defaultSampleRate'],
+                # Store native config for stream opening
+                '_loopback_channels': dev['maxInputChannels'],
+            })
+        p.terminate()
         return sources
 
     # ------------------------------------------------------------------ #
@@ -145,18 +166,6 @@ class AudioCapture:
         return sd.WasapiSettings(exclusive=False, auto_convert=True)
 
     @staticmethod
-    def _get_device_channels(device_idx, is_loopback):
-        """Query native channel count for a device.
-
-        Loopback devices are real input devices created by PortAudio WASAPI
-        — use their max_input_channels.  Regular mics are opened mono.
-        """
-        if is_loopback:
-            info = sd.query_devices(device_idx)
-            return max(int(info['max_input_channels']), 1)
-        return 1  # regular input devices: always open mono
-
-    @staticmethod
     def _downmix_to_mono_int16(indata):
         """Downmix multi-channel int16 input to mono, avoiding overflow.
 
@@ -180,17 +189,75 @@ class AudioCapture:
         return callback
 
     def _open_sd_stream(self, device_idx, is_loopback, buffer_list, lock):
-        """Open and return a sounddevice InputStream for the given device."""
-        channels = self._get_device_channels(device_idx, is_loopback)
+        """Open and return a sounddevice InputStream (mic input only)."""
         stream = sd.InputStream(
             device=device_idx,
-            channels=channels,
+            channels=1,
             samplerate=self.sample_rate,
             dtype='int16',
             callback=self._make_sd_callback(buffer_list, lock),
             extra_settings=self._wasapi_extra(is_loopback),
         )
         return stream
+
+    def _open_loopback_stream(self, device_idx, buffer_list, lock):
+        """Open a WASAPI loopback stream via pyaudiowpatch.
+
+        Returns a pyaudio stream object. The caller must keep the PyAudio
+        instance alive (stored in self._pyaudio).
+        """
+        if self._pyaudio is None:
+            self._pyaudio = pyaudio.PyAudio()
+        dev = self._pyaudio.get_device_info_by_index(device_idx)
+        channels = dev['maxInputChannels']
+        rate = int(dev['defaultSampleRate'])
+
+        def callback(in_data, frame_count, time_info, status):
+            # in_data is raw bytes — multi-channel int16
+            arr = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
+            mono = AudioCapture._downmix_to_mono_int16(arr)
+            with lock:
+                buffer_list.append(mono.tobytes())
+            return (None, pyaudio.paContinue)
+
+        stream = self._pyaudio.open(
+            format=pyaudio.paInt16,
+            channels=channels,
+            rate=rate,
+            input=True,
+            input_device_index=device_idx,
+            stream_callback=callback,
+        )
+        return stream
+
+    @staticmethod
+    def _safe_close_stream(stream):
+        """Stop and close a stream (sounddevice or pyaudio), ignoring errors."""
+        if stream is None:
+            return
+        # sounddevice streams have .active; pyaudio streams have .is_active()
+        try:
+            is_active = stream.active if hasattr(stream, 'active') else stream.is_active()
+            if is_active:
+                if hasattr(stream, 'stop_stream'):
+                    stream.stop_stream()  # pyaudio
+                else:
+                    stream.stop()  # sounddevice
+        except Exception as e:
+            print(f"Warning: stream stop failed: {e}")
+        try:
+            stream.close()
+        except Exception as e:
+            print(f"Warning: stream close failed: {e}")
+
+    def _cleanup_pyaudio(self):
+        """Terminate the PyAudio instance if no streams are active."""
+        if self._pyaudio is not None and self._stream1 is None and self._stream2 is None:
+            try:
+                self._pyaudio.terminate()
+            except Exception:
+                pass
+            self._pyaudio = None
 
     # ------------------------------------------------------------------ #
     #  Blocking recording (fixed duration)                                 #
@@ -235,16 +302,19 @@ class AudioCapture:
             chunks = []
             lock = threading.Lock()
 
-            stream = self._open_sd_stream(
-                device_idx, is_loopback, chunks, lock
-            )
+            if is_loopback and _HAS_PYAUDIOWPATCH:
+                stream = self._open_loopback_stream(device_idx, chunks, lock)
+            else:
+                stream = self._open_sd_stream(
+                    device_idx, is_loopback, chunks, lock
+                )
             stream.start()
 
             import time
             time.sleep(duration)
 
-            stream.stop()
-            stream.close()
+            self._safe_close_stream(stream)
+            self._cleanup_pyaudio()
 
             audio_data = b''.join(chunks)
             with wave.open(output_file, 'wb') as wav_file:
@@ -338,8 +408,14 @@ class AudioCapture:
             lock1 = threading.Lock()
             lock2 = threading.Lock()
 
-            stream1 = self._open_sd_stream(idx1, lb1, buf1, lock1)
-            stream2 = self._open_sd_stream(idx2, lb2, buf2, lock2)
+            if lb1 and _HAS_PYAUDIOWPATCH:
+                stream1 = self._open_loopback_stream(idx1, buf1, lock1)
+            else:
+                stream1 = self._open_sd_stream(idx1, lb1, buf1, lock1)
+            if lb2 and _HAS_PYAUDIOWPATCH:
+                stream2 = self._open_loopback_stream(idx2, buf2, lock2)
+            else:
+                stream2 = self._open_sd_stream(idx2, lb2, buf2, lock2)
 
             stream1.start()
             stream2.start()
@@ -347,10 +423,9 @@ class AudioCapture:
             import time
             time.sleep(duration)
 
-            stream1.stop()
-            stream2.stop()
-            stream1.close()
-            stream2.close()
+            self._safe_close_stream(stream1)
+            self._safe_close_stream(stream2)
+            self._cleanup_pyaudio()
 
             with lock1:
                 audio1 = b''.join(buf1)
@@ -461,9 +536,14 @@ class AudioCapture:
             self._buffer1 = []
             self._live_read_pos1 = 0
 
-            self._stream1 = self._open_sd_stream(
-                device_idx, is_loopback, self._buffer1, self._buffer1_lock
-            )
+            if is_loopback and _HAS_PYAUDIOWPATCH:
+                self._stream1 = self._open_loopback_stream(
+                    device_idx, self._buffer1, self._buffer1_lock
+                )
+            else:
+                self._stream1 = self._open_sd_stream(
+                    device_idx, is_loopback, self._buffer1, self._buffer1_lock
+                )
             self._stream2 = None
             self.process1 = None
             self.process2 = None
@@ -557,15 +637,7 @@ class AudioCapture:
             print(f"Error saving recording: {e}")
 
         # Stop/close stream — errors here must not prevent cleanup
-        try:
-            if self._stream1.active:
-                self._stream1.stop()
-        except Exception as e:
-            print(f"Warning: stream stop failed: {e}")
-        try:
-            self._stream1.close()
-        except Exception as e:
-            print(f"Warning: stream close failed: {e}")
+        self._safe_close_stream(self._stream1)
 
         # Unconditional cleanup
         self._stream1 = None
@@ -573,6 +645,7 @@ class AudioCapture:
         self.recording_process = None
         self._recording_mode = None
         self._buffer1 = []
+        self._cleanup_pyaudio()
 
         return saved
 
@@ -658,12 +731,24 @@ class AudioCapture:
             self._live_read_pos1 = 0
             self._live_read_pos2 = 0
 
-            self._stream1 = self._open_sd_stream(
-                idx1, lb1, self._buffer1, self._buffer1_lock
-            )
-            self._stream2 = self._open_sd_stream(
-                idx2, lb2, self._buffer2, self._buffer2_lock
-            )
+            # Source 1 (monitor/loopback): use pyaudiowpatch if available
+            if lb1 and _HAS_PYAUDIOWPATCH:
+                self._stream1 = self._open_loopback_stream(
+                    idx1, self._buffer1, self._buffer1_lock
+                )
+            else:
+                self._stream1 = self._open_sd_stream(
+                    idx1, lb1, self._buffer1, self._buffer1_lock
+                )
+            # Source 2 (mic): always sounddevice
+            if lb2 and _HAS_PYAUDIOWPATCH:
+                self._stream2 = self._open_loopback_stream(
+                    idx2, self._buffer2, self._buffer2_lock
+                )
+            else:
+                self._stream2 = self._open_sd_stream(
+                    idx2, lb2, self._buffer2, self._buffer2_lock
+                )
             self.process1 = None
             self.process2 = None
             self.output_file = output_file
@@ -833,18 +918,8 @@ class AudioCapture:
             print(f"Error saving recording: {e}")
 
         # Stop/close streams — errors here must not prevent cleanup
-        for stream in (self._stream1, self._stream2):
-            if stream is None:
-                continue
-            try:
-                if stream.active:
-                    stream.stop()
-            except Exception as e:
-                print(f"Warning: stream stop failed: {e}")
-            try:
-                stream.close()
-            except Exception as e:
-                print(f"Warning: stream close failed: {e}")
+        self._safe_close_stream(self._stream1)
+        self._safe_close_stream(self._stream2)
 
         # Unconditional cleanup
         self._stream1 = None
@@ -853,6 +928,7 @@ class AudioCapture:
         self._recording_mode = None
         self._buffer1 = []
         self._buffer2 = []
+        self._cleanup_pyaudio()
 
         return saved
 
