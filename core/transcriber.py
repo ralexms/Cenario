@@ -294,8 +294,10 @@ class Transcriber:
                 continue
 
             tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            tmp_path = tmp.name
+            tmp.close()
             try:
-                with wave.open(tmp.name, 'wb') as wf:
+                with wave.open(tmp_path, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
                     wf.setframerate(capture.sample_rate)
@@ -304,7 +306,7 @@ class Transcriber:
                 kwargs = {'beam_size': 3}
                 if language:
                     kwargs['language'] = language
-                segments, _ = self.model.transcribe(tmp.name, **kwargs)
+                segments, _ = self.model.transcribe(tmp_path, **kwargs)
                 for seg in segments:
                     start = elapsed + seg.start
                     end = elapsed + seg.end
@@ -314,7 +316,10 @@ class Transcriber:
             except Exception as e:
                 print(f"Live transcription error: {e}")
             finally:
-                os.unlink(tmp.name)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
             elapsed += len(chunk) / capture.sample_rate
 
