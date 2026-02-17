@@ -22,7 +22,7 @@ def main():
     print(f"Recording 5 seconds from HDMI output...")
     print("Make sure audio is playing!")
 
-    success = recorder.record(test_source, duration=5, output_file="class_test.wav")
+    success = recorder.record(test_source, duration=5, output_file="../class_test.wav")
 
     if success:
         print("✓ Recording successful!")

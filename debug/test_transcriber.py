@@ -7,7 +7,7 @@ transcriber = Transcriber(device="cuda", compute_type="float16")
 print("=== Testing Whisper Transcription ===\n")
 
 # Test with the stereo recording we made earlier
-audio_file = "harvard.wav"
+audio_file = "../harvard.wav"
 
 print(f"Transcribing: {audio_file}")
 print("Using 'small' model...\n")

@@ -26,7 +26,7 @@ success = recorder.record_stereo(
     source1_name=source1,
     source2_name=source2,
     duration=10,
-    output_file="stereo_test.wav"
+    output_file="../stereo_test.wav"
 )
 
 if success:

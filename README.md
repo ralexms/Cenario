@@ -13,6 +13,12 @@ Cenario is a local, privacy-focused meeting transcription and summarization tool
 *   **CLI Support**: Full command-line interface for headless operation or automation.
 *   **Export Formats**: Exports transcripts to TXT, JSON, SRT, and summaries to Markdown.
 
+![Cenario Interface - Recording](Cenario%20—%20Meeting%20Transcription%20-%20Recording.png)
+
+![Cenario Interface - Post-Processing](Cenario%20—%20Meeting%20Transcription%20-%20Post-Processing.png)
+
+![Cenario Interface - Summarization](Cenario%20—%20Meeting%20Transcription%20-%20Summarization.png)
+
 ## Requirements
 
 *   **OS**: Linux (PulseAudio/PipeWire required for system audio capture)

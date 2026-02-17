@@ -11,7 +11,7 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 
 print("=== Testing Stereo Transcription + Diarization ===\n")
 
-audio_file = "stereo_test.wav"
+audio_file = "../stereo_test.wav"
 
 print(f"Transcribing: {audio_file}")
 print("Processing left (meeting audio) and right (microphone) separately...\n")

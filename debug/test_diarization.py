@@ -13,7 +13,7 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 print("=== Testing Transcription + Diarization ===\n")
 
 result = transcriber.transcribe_with_diarization(
-    audio_file="stereo_test.wav",
+    audio_file="../stereo_test.wav",
     model_size="small",
     hf_token=HF_TOKEN
 )

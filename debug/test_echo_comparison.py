@@ -18,7 +18,7 @@ print("Recording 10s from REGULAR laptop mic...")
 recorder.record(
     source_name="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source",
     duration=10,
-    output_file="mic_regular.wav"
+    output_file="../mic_regular.wav"
 )
 print("✓ Done\n")
 
@@ -29,7 +29,7 @@ print("Recording 10s from ECHO-CANCELLED laptop mic...")
 recorder.record(
     source_name="laptop_mic_echo_cancelled",
     duration=10,
-    output_file="mic_echo_cancelled.wav"
+    output_file="../mic_echo_cancelled.wav"
 )
 print("✓ Done\n")
 
