@@ -5,3 +5,5 @@
 [ ] keep database of recorded meetings and their corresponding folders (json maybe?), transcription outputs, and summarization outputs. This will allow for easier retrieval and management of past recordings and their associated data.
 [ ] Add functionality to pause, stop and continue transcription from previous state. This will allow users to not have to wait for the transcription in a single session.
 [ ] fix echo cancellation issue.
+[ ] Disable folder creation when starting Preview only
+[ ] Disable intermediary transcription creation when diarization is disabled
