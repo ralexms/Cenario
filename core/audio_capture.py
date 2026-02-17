@@ -92,23 +92,29 @@ class AudioCapture:
             if wasapi_idx is not None and d['hostapi'] != wasapi_idx:
                 continue
 
-            # Input devices (microphones)
-            if d['max_input_channels'] > 0:
-                state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
+            if d['max_input_channels'] <= 0:
+                continue
+
+            # PortAudio WASAPI creates loopback input devices with
+            # "[Loopback]" appended to the output device name.
+            is_loopback = '[Loopback]' in d['name']
+
+            if is_loopback:
+                # Strip the "[Loopback]" tag for a cleaner display name
+                clean_name = d['name'].replace('[Loopback]', '').strip()
+                state = 'RUNNING' if clean_name == default_output_name else 'IDLE'
                 sources.append({
-                    'name': f"input_{i}",
-                    'description': d['name'],
+                    'name': f"loopback_{i}",
+                    'description': f"{clean_name} (Loopback)",
                     'state': state,
                     'index': i,
                     'default_samplerate': d['default_samplerate'],
                 })
-
-            # Output devices exposed as loopback sources
-            if d['max_output_channels'] > 0:
-                state = 'RUNNING' if d['name'] == default_output_name else 'IDLE'
+            else:
+                state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
                 sources.append({
-                    'name': f"loopback_{i}",
-                    'description': f"{d['name']} (Loopback)",
+                    'name': f"input_{i}",
+                    'description': d['name'],
                     'state': state,
                     'index': i,
                     'default_samplerate': d['default_samplerate'],
@@ -142,12 +148,12 @@ class AudioCapture:
     def _get_device_channels(device_idx, is_loopback):
         """Query native channel count for a device.
 
-        Loopback sources are output devices — their native channel count
-        is max_output_channels.  Regular input devices are opened mono.
+        Loopback devices are real input devices created by PortAudio WASAPI
+        — use their max_input_channels.  Regular mics are opened mono.
         """
         if is_loopback:
             info = sd.query_devices(device_idx)
-            return max(int(info['max_output_channels']), 1)
+            return max(int(info['max_input_channels']), 1)
         return 1  # regular input devices: always open mono
 
     @staticmethod
@@ -174,34 +180,17 @@ class AudioCapture:
         return callback
 
     def _open_sd_stream(self, device_idx, is_loopback, buffer_list, lock):
-        """Open and return a sounddevice InputStream for the given device.
-
-        For loopback devices, tries native output channel count first
-        (required by some WASAPI drivers), then falls back to mono.
-        """
-        native_ch = self._get_device_channels(device_idx, is_loopback)
-        attempts = [native_ch] if not is_loopback else [native_ch, 1]
-        # Deduplicate while preserving order
-        seen = set()
-        attempts = [c for c in attempts if not (c in seen or seen.add(c))]
-
-        last_err = None
-        for ch in attempts:
-            try:
-                stream = sd.InputStream(
-                    device=device_idx,
-                    channels=ch,
-                    samplerate=self.sample_rate,
-                    dtype='int16',
-                    callback=self._make_sd_callback(buffer_list, lock),
-                    extra_settings=self._wasapi_extra(is_loopback),
-                )
-                return stream
-            except sd.PortAudioError as e:
-                last_err = e
-                print(f"Warning: failed to open device {device_idx} "
-                      f"with {ch} channel(s): {e}")
-        raise last_err
+        """Open and return a sounddevice InputStream for the given device."""
+        channels = self._get_device_channels(device_idx, is_loopback)
+        stream = sd.InputStream(
+            device=device_idx,
+            channels=channels,
+            samplerate=self.sample_rate,
+            dtype='int16',
+            callback=self._make_sd_callback(buffer_list, lock),
+            extra_settings=self._wasapi_extra(is_loopback),
+        )
+        return stream
 
     # ------------------------------------------------------------------ #
     #  Blocking recording (fixed duration)                                 #
