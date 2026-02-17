@@ -1,5 +1,6 @@
 from faster_whisper import WhisperModel
 import torch
+import gc
 import wave
 import numpy as np
 import tempfile
@@ -40,9 +41,11 @@ class Transcriber:
             del self.model
             self.model = None
             self.current_model_size = None
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
-            print("Model unloaded, GPU memory freed")
+
+        gc.collect()
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        print("Model unloaded, GPU memory freed")
 
     def transcribe(self, audio_file, model_size="small", language=None,
                    on_segment=None, beam_size=5, vad_filter=False):

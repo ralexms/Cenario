@@ -118,10 +118,31 @@ def api_recordings():
             files.append({'name': f, 'path': path, 'size_mb': round(size_mb, 1)})
     return jsonify(files)
 
+@app.route('/api/folder_files')
+def api_folder_files():
+    """List WAV files in a specific folder."""
+    folder = request.args.get('folder', '')
+    if not folder or not os.path.exists(folder) or not os.path.isdir(folder):
+        return jsonify([])
+    files = []
+    for f in sorted(os.listdir(folder)):
+        if f.endswith('.wav'):
+            path = os.path.join(folder, f)
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            files.append({'name': f, 'path': path, 'size_mb': round(size_mb, 1)})
+    return jsonify(files)
+
 @app.route('/api/folders')
 def api_folders():
-    """List subfolders in recordings directory."""
-    rec_dir = os.path.join(BASE_DIR, 'recordings')
+    """List subfolders in the specified base directory (defaults to recordings)."""
+    base = request.args.get('base', '').strip()
+    if base:
+        if os.path.isabs(base):
+            rec_dir = base
+        else:
+            rec_dir = os.path.join(BASE_DIR, base)
+    else:
+        rec_dir = os.path.join(BASE_DIR, 'recordings')
     if not os.path.exists(rec_dir):
         return jsonify([])
     folders = []
@@ -485,6 +506,25 @@ def api_export():
     return jsonify({'status': 'exported', 'files': exported})
 
 
+@app.route('/api/folder_transcriptions')
+def api_folder_transcriptions():
+    """List transcription files (.json, .srt, .txt) in a specific folder."""
+    folder = request.args.get('folder', '')
+    if not folder or not os.path.exists(folder) or not os.path.isdir(folder):
+        return jsonify([])
+    extensions = {'.json', '.srt', '.txt'}
+    files = []
+    for f in sorted(os.listdir(folder)):
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in extensions:
+            continue
+        path = os.path.join(folder, f)
+        if not os.path.isfile(path):
+            continue
+        size_kb = os.path.getsize(path) / 1024
+        files.append({'name': f, 'path': path, 'size_kb': round(size_kb, 1)})
+    return jsonify(files)
+
 @app.route('/api/transcriptions')
 def api_transcriptions():
     """List available transcription JSON files across known directories."""
@@ -663,6 +703,7 @@ def api_summarize_start():
     file_path = body.get('file')
     model_id = body.get('model', 'Qwen/Qwen2.5-0.5B-Instruct')
     detail_level = body.get('detail_level', 'concise')
+    quantization = body.get('quantization', '4')
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -672,23 +713,25 @@ def api_summarize_start():
     _summary['status'] = 'summarizing'
 
     def run():
-        summarizer = Summarizer(model_id=model_id)
+        summarizer = Summarizer(model_id=model_id, quantization=quantization)
         try:
-            # Load transcription
-            with open(file_path, 'r', encoding='utf-8') as f:
-                transcription = json.load(f)
-            
-            # Merge segments
-            from core.exporter import _merge_stereo_segments
-            segments = _merge_stereo_segments(transcription)
-            
-            # Build full text
-            lines = []
-            for seg in segments:
-                speaker = seg.get('speaker', 'UNKNOWN')
-                text = seg.get('text', '').strip()
-                lines.append(f"{speaker}: {text}")
-            full_text = "\n".join(lines)
+            # Load transcription based on file type
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext == '.json':
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    transcription = json.load(f)
+                from core.exporter import _merge_stereo_segments
+                segments = _merge_stereo_segments(transcription)
+                lines = []
+                for seg in segments:
+                    speaker = seg.get('speaker', 'UNKNOWN')
+                    text = seg.get('text', '').strip()
+                    lines.append(f"{speaker}: {text}")
+                full_text = "\n".join(lines)
+            else:
+                # .txt and .srt — read as plain text
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    full_text = f.read()
             
             if not full_text.strip():
                 raise ValueError("No text to summarize")

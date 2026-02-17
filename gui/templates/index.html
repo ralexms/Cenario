@@ -8,31 +8,32 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #e0e0e0;
+            background: #f4f7f6;
+            color: #333;
             padding: 20px;
             max-width: 960px;
             margin: 0 auto;
         }
-        h1 { color: #e94560; margin-bottom: 20px; }
-        h2 { color: #0f3460; background: #e94560; padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 1em; }
+        h1 { color: #005b96; margin-bottom: 20px; }
+        h2 { color: #fff; background: #005b96; padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 1em; }
 
         .card {
-            background: #16213e;
+            background: #ffffff;
             border-radius: 6px;
             margin-bottom: 16px;
-            border: 1px solid #0f3460;
+            border: 1px solid #e0e0e0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         .card-body { padding: 14px; }
 
-        label { display: block; margin-bottom: 4px; font-size: 0.9em; color: #aaa; }
+        label { display: block; margin-bottom: 4px; font-size: 0.9em; color: #666; }
         select, input[type="number"], input[type="text"] {
             width: 100%;
             padding: 8px;
             border-radius: 4px;
-            border: 1px solid #0f3460;
-            background: #1a1a2e;
-            color: #e0e0e0;
+            border: 1px solid #ccc;
+            background: #fff;
+            color: #333;
             margin-bottom: 10px;
         }
 
@@ -40,7 +41,7 @@
         .row > div { flex: 1; }
 
         .radio-group { display: flex; gap: 16px; margin-bottom: 12px; }
-        .radio-group label { display: inline; color: #e0e0e0; cursor: pointer; }
+        .radio-group label { display: inline; color: #333; cursor: pointer; }
 
         button {
             padding: 10px 20px;
@@ -51,16 +52,16 @@
             font-weight: 600;
         }
         .btn-start { background: #4caf50; color: #fff; }
-        .btn-stop { background: #e94560; color: #fff; }
-        .btn-action { background: #0f3460; color: #e0e0e0; }
+        .btn-stop { background: #d32f2f; color: #fff; }
+        .btn-action { background: #005b96; color: #fff; }
         .btn-warn { background: #ff9800; color: #fff; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
         .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
         .output-area {
-            background: #0d1117;
-            border: 1px solid #0f3460;
+            background: #f8f9fa;
+            border: 1px solid #ccc;
             border-radius: 4px;
             padding: 10px;
             height: 220px;
@@ -69,13 +70,14 @@
             font-size: 0.85em;
             line-height: 1.6;
             white-space: pre-wrap;
+            color: #333;
         }
 
         .segment { margin-bottom: 4px; }
-        .segment .time { color: #e94560; }
-        .segment .speaker { color: #4caf50; }
-        .segment .text { color: #e0e0e0; }
-        .segment .channel { color: #ff9800; font-size: 0.8em; }
+        .segment .time { color: #005b96; font-weight: bold; }
+        .segment .speaker { color: #2e7d32; font-weight: bold; }
+        .segment .text { color: #333; }
+        .segment .channel { color: #ef6c00; font-size: 0.8em; }
 
         .status {
             padding: 6px 12px;
@@ -84,7 +86,7 @@
             display: inline-block;
         }
         .status.recording { background: #4caf50; color: #fff; animation: pulse 1.5s infinite; }
-        .status.idle { background: #555; color: #ccc; }
+        .status.idle { background: #999; color: #fff; }
         .status.processing { background: #ff9800; color: #fff; animation: pulse 2s infinite; }
 
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
@@ -92,7 +94,7 @@
         .progress-bar {
             width: 100%;
             height: 6px;
-            background: #0f3460;
+            background: #e0e0e0;
             border-radius: 3px;
             margin: 8px 0;
             overflow: hidden;
@@ -106,14 +108,14 @@
         }
 
         .checkbox-group { display: flex; gap: 16px; margin-bottom: 10px; }
-        .checkbox-group label { color: #e0e0e0; cursor: pointer; display: inline; }
+        .checkbox-group label { color: #333; cursor: pointer; display: inline; }
 
         .hidden { display: none; }
 
-        .warning { color: #ff9800; margin: 6px 0; font-size: 0.9em; }
-        .error { color: #e94560; margin: 6px 0; font-size: 0.9em; }
-        .success { color: #4caf50; margin: 6px 0; font-size: 0.9em; }
-        .info { color: #aaa; margin: 6px 0; font-size: 0.9em; }
+        .warning { color: #ef6c00; margin: 6px 0; font-size: 0.9em; }
+        .error { color: #d32f2f; margin: 6px 0; font-size: 0.9em; }
+        .success { color: #2e7d32; margin: 6px 0; font-size: 0.9em; }
+        .info { color: #666; margin: 6px 0; font-size: 0.9em; }
 
         /* Tooltip container */
         .tooltip {
@@ -164,8 +166,8 @@
         /* Tabs */
         .tab {
             overflow: hidden;
-            border: 1px solid #0f3460;
-            background-color: #16213e;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
             border-radius: 6px 6px 0 0;
             margin-bottom: -1px;
         }
@@ -178,29 +180,30 @@
             cursor: pointer;
             padding: 14px 16px;
             transition: 0.3s;
-            color: #aaa;
+            color: #666;
             border-radius: 0;
             margin: 0;
         }
 
         .tab button:hover {
-            background-color: #0f3460;
-            color: #e0e0e0;
+            background-color: #ddd;
+            color: #000;
         }
 
         .tab button.active {
-            background-color: #e94560;
+            background-color: #005b96;
             color: white;
         }
 
         .tabcontent {
             display: none;
             padding: 6px 12px;
-            border: 1px solid #0f3460;
+            border: 1px solid #ccc;
             border-top: none;
-            background: #16213e;
+            background: #ffffff;
             border-radius: 0 0 6px 6px;
             margin-bottom: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
 
         .tabcontent.active {
@@ -265,8 +268,8 @@
         <div class="row">
             <div>
                 <div class="radio-group" style="margin-bottom: 12px;">
-                    <label><input type="radio" name="mode" value="stereo" checked onchange="toggleMode()"> Online Meeting (stereo)</label>
-                    <label><input type="radio" name="mode" value="mono" onchange="toggleMode()"> Local Meeting (mono)</label>
+                    <label><input type="radio" name="mode" value="stereo" checked onchange="toggleMode()"> Online Meeting</label>
+                    <label><input type="radio" name="mode" value="mono" onchange="toggleMode()"> Local Meeting</label>
                 </div>
             </div>
         </div>
@@ -371,7 +374,7 @@
             <span id="speakerStatus" class="info"></span>
         </div>
 
-        <h3 style="margin-top: 20px;">Export</h3>
+<!--        <h3 style="margin-top: 20px;">Export</h3>-->
         <div class="checkbox-group">
             <label><input type="checkbox" value="txt" class="exportFmt" checked> TXT</label>
             <label><input type="checkbox" value="json" class="exportFmt" checked> JSON</label>
@@ -400,23 +403,34 @@
                 <label for="summaryModel">Model</label>
                 <div class="tooltip" style="width:100%">
                     <select id="summaryModel">
-                        <option value="Qwen/Qwen2.5-0.5B-Instruct" selected>Qwen 2.5 0.5B (Fast, Low VRAM)</option>
-                        <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen 2.5 1.5B (Balanced)</option>
+                        <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen 2.5 0.5B (Fast, Low VRAM)</option>
+                        <option value="Qwen/Qwen2.5-1.5B-Instruct" selected>Qwen 2.5 1.5B (Balanced)</option>
                         <option value="Qwen/Qwen2.5-3B-Instruct">Qwen 2.5 3B (Better Quality)</option>
                     </select>
-                    <span class="tooltiptext">0.5B: ~1.5GB VRAM<br>1.5B: ~3.5GB VRAM<br>3B: ~6.5GB VRAM</span>
+                    <span class="tooltiptext">0.5B: ~0.5GB VRAM<br>1.5B: ~1GB VRAM<br>3B: ~2GB VRAM<br>(4-bit quantized)</span>
                 </div>
             </div>
             <div>
                 <label for="summaryDetail">Detail Level</label>
                 <select id="summaryDetail">
-                    <option value="concise" selected>Concise</option>
-                    <option value="detailed">Detailed</option>
+                    <option value="concise">Concise</option>
+                    <option value="detailed" selected>Detailed</option>
                     <option value="comprehensive">Comprehensive</option>
                 </select>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="summaryQuant">Quantization</label>
+                <div class="tooltip" style="width:100%">
+                    <select id="summaryQuant">
+                        <option value="4">4-bit (Recommended)</option>
+                        <option value="8" selected>8-bit (Better quality)</option>
+                        <option value="none">None (Full precision)</option>
+                    </select>
+                    <span class="tooltiptext">4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM</span>
+                </div>
+            </div>
             <div style="display:flex;align-items:end;padding-bottom:10px;">
                 <button id="btnSummarize" class="btn-action" onclick="startSummarization()">Summarize</button>
             </div>
@@ -499,6 +513,7 @@
                 if (data.path) {
                     document.getElementById('outputFolder').value = data.path;
                     localStorage.setItem('cenario_output_folder', data.path);
+                    loadFolders();
                 }
             })
             .catch(err => console.error(err));
@@ -537,7 +552,8 @@
 
     async function loadFolders() {
         try {
-            const resp = await fetch('/api/folders');
+            const outputFolder = document.getElementById('outputFolder').value || 'recordings';
+            const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
             const folders = await resp.json();
 
             const postSel = document.getElementById('postFolder');
@@ -567,17 +583,29 @@
             // Load transcriptions for speaker naming
             loadTranscriptions(folder);
 
-            const folderName = folder.split('/').pop();
-            const wavPath = folder + '/' + folderName + '.wav';
+            const resp = await fetch('/api/folder_files?folder=' + encodeURIComponent(folder));
+            const files = await resp.json();
 
             const sel = document.getElementById('postFile');
             sel.innerHTML = '';
-            const opt = document.createElement('option');
-            opt.value = wavPath;
-            opt.textContent = folderName + '.wav';
-            sel.appendChild(opt);
 
-            currentFile = wavPath;
+            if (!files.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No WAV files found';
+                sel.appendChild(opt);
+                currentFile = null;
+                return;
+            }
+
+            files.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.path;
+                opt.textContent = f.name + ' (' + f.size_mb + ' MB)';
+                sel.appendChild(opt);
+            });
+
+            currentFile = files[0].path;
 
         } catch (e) {
             console.error(e);
@@ -589,7 +617,7 @@
         if (!folder) return;
 
         try {
-            const resp = await fetch('/api/transcriptions?folder=' + encodeURIComponent(folder));
+            const resp = await fetch('/api/folder_transcriptions?folder=' + encodeURIComponent(folder));
             const files = await resp.json();
 
             const sel = document.getElementById('summaryFile');
@@ -897,15 +925,12 @@
     // ---- Speaker Naming ----
     async function loadTranscriptions(folder = null) {
         try {
-            let url = '/api/transcriptions';
-            if (folder) {
-                url += '?folder=' + encodeURIComponent(folder);
-            } else {
-                const outputFolder = document.getElementById('outputFolder').value || 'recordings';
-                url += '?folder=' + encodeURIComponent(outputFolder);
+            if (!folder) {
+                folder = document.getElementById('postFolder').value;
             }
+            if (!folder) return;
 
-            const resp = await fetch(url);
+            const resp = await fetch('/api/folder_transcriptions?folder=' + encodeURIComponent(folder));
             const files = await resp.json();
 
             // Populate Speaker Naming dropdown
@@ -1034,6 +1059,7 @@
 
         const model = document.getElementById('summaryModel').value;
         const detailLevel = document.getElementById('summaryDetail').value;
+        const quantization = document.getElementById('summaryQuant').value;
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -1050,7 +1076,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel })
+                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization })
             });
             const data = await resp.json();
 
