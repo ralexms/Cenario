@@ -92,23 +92,31 @@ class AudioCapture:
             if wasapi_idx is not None and d['hostapi'] != wasapi_idx:
                 continue
 
-            # Input devices (microphones)
-            if d['max_input_channels'] > 0:
-                state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
-                sources.append({
-                    'name': f"input_{i}",
-                    'description': d['name'],
-                    'state': state,
-                    'index': i,
-                    'default_samplerate': d['default_samplerate'],
-                })
+            # Only consider devices that can provide input
+            if d['max_input_channels'] <= 0:
+                continue
 
-            # Output devices exposed as loopback sources
-            if d['max_output_channels'] > 0:
+            # PortAudio WASAPI exposes loopback capture as separate input
+            # devices.  PaWasapi_IsLoopback() identifies them.
+            try:
+                is_loopback = bool(sd._lib.PaWasapi_IsLoopback(i))
+            except Exception:
+                is_loopback = False
+
+            if is_loopback:
                 state = 'RUNNING' if d['name'] == default_output_name else 'IDLE'
                 sources.append({
                     'name': f"loopback_{i}",
                     'description': f"{d['name']} (Loopback)",
+                    'state': state,
+                    'index': i,
+                    'default_samplerate': d['default_samplerate'],
+                })
+            else:
+                state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
+                sources.append({
+                    'name': f"input_{i}",
+                    'description': d['name'],
                     'state': state,
                     'index': i,
                     'default_samplerate': d['default_samplerate'],
@@ -142,14 +150,14 @@ class AudioCapture:
     def _get_device_channels(device_idx, is_loopback):
         """Query native channel count for a device.
 
-        Loopback sources must be opened with the output device's native
-        channel count — WASAPI rejects a mismatch even with auto_convert.
+        Loopback devices must be opened with their native input channel
+        count — WASAPI rejects a mismatch even with auto_convert.
         Regular input devices are opened mono.
         """
-        info = sd.query_devices(device_idx)
         if is_loopback:
-            return max(int(info['max_output_channels']), 1)
-        return 1  # input devices: always open mono
+            info = sd.query_devices(device_idx)
+            return max(int(info['max_input_channels']), 1)
+        return 1  # regular input devices: always open mono
 
     @staticmethod
     def _downmix_to_mono_int16(indata):
