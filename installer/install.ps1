@@ -125,35 +125,35 @@ Info "Installing dependencies..."
 Info "Creating launcher scripts..."
 
 # GUI launcher (.bat)
-$guiBat = @"
-@echo off
-set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "HF_HOME=%SCRIPT_DIR%\models"
-set "CENARIO_DATA_DIR=%SCRIPT_DIR%\data"
-"%SCRIPT_DIR%\venv\Scripts\python.exe" "%SCRIPT_DIR%\app\gui\app.py" %*
-"@
+$guiBat = @(
+    '@echo off',
+    'set "SCRIPT_DIR=%~dp0"',
+    'set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"',
+    'set "HF_HOME=%SCRIPT_DIR%\models"',
+    'set "CENARIO_DATA_DIR=%SCRIPT_DIR%\data"',
+    '"%SCRIPT_DIR%\venv\Scripts\python.exe" "%SCRIPT_DIR%\app\gui\app.py" %*'
+) -join "`r`n"
 Set-Content -Path (Join-Path $InstallDir "cenario-gui.bat") -Value $guiBat -Encoding ASCII
 
 # CLI launcher (.bat)
-$cliBat = @"
-@echo off
-set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "HF_HOME=%SCRIPT_DIR%\models"
-set "CENARIO_DATA_DIR=%SCRIPT_DIR%\data"
-"%SCRIPT_DIR%\venv\Scripts\python.exe" "%SCRIPT_DIR%\app\cenario.py" %*
-"@
+$cliBat = @(
+    '@echo off',
+    'set "SCRIPT_DIR=%~dp0"',
+    'set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"',
+    'set "HF_HOME=%SCRIPT_DIR%\models"',
+    'set "CENARIO_DATA_DIR=%SCRIPT_DIR%\data"',
+    '"%SCRIPT_DIR%\venv\Scripts\python.exe" "%SCRIPT_DIR%\app\cenario.py" %*'
+) -join "`r`n"
 Set-Content -Path (Join-Path $InstallDir "cenario.bat") -Value $cliBat -Encoding ASCII
 
 # ---- Create .env template if not present ----
 $envFile = Join-Path $InstallDir ".env"
 if (-not (Test-Path $envFile)) {
-    $envContent = @"
-# Cenario configuration
-# Uncomment and set your HuggingFace token to enable speaker diarization:
-# HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-"@
+    $envContent = @(
+        '# Cenario configuration',
+        '# Uncomment and set your HuggingFace token to enable speaker diarization:',
+        '# HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+    ) -join "`r`n"
     Set-Content -Path $envFile -Value $envContent -Encoding UTF8
     Info "Created .env template at $envFile"
 }
