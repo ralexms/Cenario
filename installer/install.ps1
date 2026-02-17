@@ -86,11 +86,11 @@ foreach ($sub in @("app", "models", "data")) {
 # ---- Copy app source ----
 Info "Copying application source..."
 foreach ($item in @("cenario.py")) {
-    $dest = Join-Path $InstallDir "app" $item
+    $dest = Join-Path (Join-Path $InstallDir "app") $item
     Copy-Item (Join-Path $RepoDir $item) -Destination $dest -Force
 }
 foreach ($dir in @("core", "gui")) {
-    $dest = Join-Path $InstallDir "app" $dir
+    $dest = Join-Path (Join-Path $InstallDir "app") $dir
     if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
     Copy-Item (Join-Path $RepoDir $dir) -Destination $dest -Recurse -Force
 }
@@ -107,8 +107,8 @@ if (-not (Test-Path $VenvDir)) {
     Info "Virtual environment already exists, reusing."
 }
 
-$Pip = Join-Path $VenvDir "Scripts" "pip.exe"
-$PythonVenv = Join-Path $VenvDir "Scripts" "python.exe"
+$Pip = Join-Path (Join-Path $VenvDir "Scripts") "pip.exe"
+$PythonVenv = Join-Path (Join-Path $VenvDir "Scripts") "python.exe"
 
 Info "Upgrading pip..."
 & $PythonVenv -m pip install --upgrade pip --quiet
@@ -119,7 +119,7 @@ Info "Installing PyTorch ($TorchIndex)..."
 
 # ---- Install remaining dependencies ----
 Info "Installing dependencies..."
-& $Pip install -r (Join-Path $RepoDir "installer" "requirements-pip.txt") --quiet
+& $Pip install -r (Join-Path (Join-Path $RepoDir "installer") "requirements-pip.txt") --quiet
 
 # ---- Generate launcher scripts ----
 Info "Creating launcher scripts..."
