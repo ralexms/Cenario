@@ -135,10 +135,8 @@ class AudioCapture:
 
     @staticmethod
     def _wasapi_extra(is_loopback):
-        """Return WasapiSettings for loopback devices, None otherwise."""
-        if is_loopback:
-            return sd.WasapiSettings(exclusive=False, auto_convert=True)
-        return None
+        """Return WasapiSettings for WASAPI devices with auto sample rate conversion."""
+        return sd.WasapiSettings(exclusive=False, auto_convert=True)
 
     def _make_sd_callback(self, buffer_list, lock):
         """Create a sounddevice callback that appends mono int16 bytes to a buffer."""
