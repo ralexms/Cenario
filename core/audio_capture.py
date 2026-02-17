@@ -138,18 +138,48 @@ class AudioCapture:
         """Return WasapiSettings for WASAPI devices with auto sample rate conversion."""
         return sd.WasapiSettings(exclusive=False, auto_convert=True)
 
+    @staticmethod
+    def _get_device_channels(device_idx, is_loopback):
+        """Query native channel count for a device.
+
+        Loopback sources must be opened with the output device's native
+        channel count — WASAPI rejects a mismatch even with auto_convert.
+        Regular input devices are opened mono.
+        """
+        info = sd.query_devices(device_idx)
+        if is_loopback:
+            return max(int(info['max_output_channels']), 1)
+        return 1  # input devices: always open mono
+
+    @staticmethod
+    def _downmix_to_mono_int16(indata):
+        """Downmix multi-channel int16 input to mono, avoiding overflow.
+
+        Args:
+            indata: numpy array of shape (frames, channels), dtype int16
+        Returns:
+            1-D numpy array of int16 mono samples
+        """
+        if indata.shape[1] == 1:
+            return indata[:, 0]
+        # Use int32 intermediate to avoid int16 overflow when summing channels
+        mixed = indata.astype(np.int32).mean(axis=1).astype(np.int16)
+        return mixed
+
     def _make_sd_callback(self, buffer_list, lock):
         """Create a sounddevice callback that appends mono int16 bytes to a buffer."""
         def callback(indata, frames, time_info, status):
+            mono = AudioCapture._downmix_to_mono_int16(indata)
             with lock:
-                buffer_list.append(indata[:, 0].tobytes())
+                buffer_list.append(mono.tobytes())
         return callback
 
     def _open_sd_stream(self, device_idx, is_loopback, buffer_list, lock):
         """Open and return a sounddevice InputStream for the given device."""
+        channels = self._get_device_channels(device_idx, is_loopback)
         stream = sd.InputStream(
             device=device_idx,
-            channels=1,
+            channels=channels,
             samplerate=self.sample_rate,
             dtype='int16',
             callback=self._make_sd_callback(buffer_list, lock),
@@ -201,12 +231,14 @@ class AudioCapture:
             lock = threading.Lock()
 
             def callback(indata, frames, time_info, status):
+                mono = AudioCapture._downmix_to_mono_int16(indata)
                 with lock:
-                    chunks.append(indata.copy().tobytes())
+                    chunks.append(mono.tobytes())
 
+            channels = self._get_device_channels(device_idx, is_loopback)
             stream = sd.InputStream(
                 device=device_idx,
-                channels=self.channels,
+                channels=channels,
                 samplerate=self.sample_rate,
                 dtype='int16',
                 callback=callback,
@@ -222,7 +254,7 @@ class AudioCapture:
 
             audio_data = b''.join(chunks)
             with wave.open(output_file, 'wb') as wav_file:
-                wav_file.setnchannels(self.channels)
+                wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(self.sample_rate)
                 wav_file.writeframes(audio_data)
@@ -509,10 +541,10 @@ class AudioCapture:
             print("No recording in progress")
             return False
 
+        saved = False
         try:
-            self._stream1.stop()
-            self._stream1.close()
-
+            # Save buffer FIRST — before touching the stream — so audio is
+            # persisted even if PortAudio crashes during stop/close.
             with self._buffer1_lock:
                 audio_data = b''.join(self._buffer1)
 
@@ -524,19 +556,31 @@ class AudioCapture:
                 wav_file.setframerate(self.sample_rate)
                 wav_file.writeframes(samples.tobytes())
 
-            # Cleanup
-            self._stream1 = None
-            self._stream2 = None
-            self.recording_process = None
-            self._recording_mode = None
-            self._buffer1 = []
-
-            print(f"Recording stopped and saved")
-            return True
+            saved = True
+            print("Recording stopped and saved")
 
         except Exception as e:
-            print(f"Error stopping recording: {e}")
-            return False
+            print(f"Error saving recording: {e}")
+
+        # Stop/close stream — errors here must not prevent cleanup
+        try:
+            if self._stream1.active:
+                self._stream1.stop()
+        except Exception as e:
+            print(f"Warning: stream stop failed: {e}")
+        try:
+            self._stream1.close()
+        except Exception as e:
+            print(f"Warning: stream close failed: {e}")
+
+        # Unconditional cleanup
+        self._stream1 = None
+        self._stream2 = None
+        self.recording_process = None
+        self._recording_mode = None
+        self._buffer1 = []
+
+        return saved
 
     # ------------------------------------------------------------------ #
     #  Non-blocking stereo recording                                       #
@@ -762,13 +806,10 @@ class AudioCapture:
             print("No recording in progress")
             return False
 
+        saved = False
         try:
-            self._stream1.stop()
-            self._stream2.stop()
-            self._stream1.close()
-            self._stream2.close()
-
-            # Combine buffered data
+            # Save buffers FIRST — before touching streams — so audio is
+            # persisted even if PortAudio crashes during stop/close.
             with self._buffer1_lock:
                 audio_data1 = b''.join(self._buffer1)
             with self._buffer2_lock:
@@ -791,20 +832,35 @@ class AudioCapture:
                 wav_file.setframerate(self.sample_rate)
                 wav_file.writeframes(stereo.tobytes())
 
-            # Cleanup
-            self._stream1 = None
-            self._stream2 = None
-            self.recording_process = None
-            self._recording_mode = None
-            self._buffer1 = []
-            self._buffer2 = []
-
-            print(f"Recording stopped and saved")
-            return True
+            saved = True
+            print("Recording stopped and saved")
 
         except Exception as e:
-            print(f"Error stopping recording: {e}")
-            return False
+            print(f"Error saving recording: {e}")
+
+        # Stop/close streams — errors here must not prevent cleanup
+        for stream in (self._stream1, self._stream2):
+            if stream is None:
+                continue
+            try:
+                if stream.active:
+                    stream.stop()
+            except Exception as e:
+                print(f"Warning: stream stop failed: {e}")
+            try:
+                stream.close()
+            except Exception as e:
+                print(f"Warning: stream close failed: {e}")
+
+        # Unconditional cleanup
+        self._stream1 = None
+        self._stream2 = None
+        self.recording_process = None
+        self._recording_mode = None
+        self._buffer1 = []
+        self._buffer2 = []
+
+        return saved
 
     # ------------------------------------------------------------------ #
     #  Source classification for GUI / CLI                                  #

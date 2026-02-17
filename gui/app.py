@@ -274,9 +274,9 @@ def api_record_stop():
         _transcriber = None
 
     if _recording_mode == 'mono':
-        _capture.stop_recording_mono()
+        save_ok = _capture.stop_recording_mono()
     else:
-        _capture.stop_recording_stereo()
+        save_ok = _capture.stop_recording_stereo()
 
     result_file = _output_file
     was_preview = _preview_only
@@ -288,7 +288,10 @@ def api_record_stop():
         os.remove(result_file)
         return jsonify({'status': 'stopped', 'preview_only': True})
 
-    return jsonify({'status': 'stopped', 'file': result_file})
+    resp = {'status': 'stopped', 'file': result_file}
+    if not save_ok:
+        resp['warning'] = 'Recording stopped but audio file may not have been saved correctly'
+    return jsonify(resp)
 
 
 @app.route('/api/live')

@@ -4,7 +4,7 @@
 [ ] Add light and dark mode themes to the UI, allowing users to switch between them based on their preference.
 [ ] keep database of recorded meetings and their corresponding folders (json maybe?), transcription outputs, and summarization outputs. This will allow for easier retrieval and management of past recordings and their associated data.
 [ ] Add functionality to pause, stop and continue transcription from previous state. This will allow users to not have to wait for the transcription in a single session.
-[ ] fix echo cancellation issue.
+[ ] Add echo cancellation for Linux (PulseAudio). Windows WASAPI loopback already captures system audio without echo.
 [ ] Disable folder creation when starting Preview only
 [ ] Disable intermediary transcription creation when diarization is disabled
 [ ] Have previously selected source selection for Monitor and Microphone persist across sessions.
