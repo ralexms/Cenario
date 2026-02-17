@@ -21,10 +21,11 @@ Cenario is a local, privacy-focused meeting transcription and summarization tool
 
 ## Requirements
 
-*   **OS**: Linux (PulseAudio/PipeWire required for system audio capture)
+*   **OS**: Linux (PulseAudio/PipeWire) or Windows (WASAPI)
 *   **GPU**: NVIDIA GPU with CUDA support recommended (4GB+ VRAM for summarization).
 *   **Python**: 3.8+
-*   **System Dependencies**: `portaudio19-dev`, `python3-dev`
+*   **System Dependencies (Linux)**: `portaudio19-dev`, `python3-dev`
+*   **System Dependencies (Windows)**: None — `sounddevice` handles audio via WASAPI
 
 ## Installation
 
@@ -93,7 +94,8 @@ You can also run Cenario from the terminal.
 ## Troubleshooting
 
 *   **CUDA Out of Memory**: If you encounter OOM errors during summarization, try selecting the **0.5B** model or closing other GPU-intensive applications. The application attempts to handle this gracefully by unloading models when not in use.
-*   **Audio Sources**: If you don't see your monitor source, ensure you are using PulseAudio or PipeWire and that your recording device is set to "Monitor of..." in your system sound settings.
+*   **Audio Sources (Linux)**: If you don't see your monitor source, ensure you are using PulseAudio or PipeWire and that your recording device is set to "Monitor of..." in your system sound settings.
+*   **Audio Sources (Windows)**: System audio capture uses WASAPI loopback. If loopback recording fails, ensure your output device supports shared mode. The default output device is auto-selected.
 
 ## Known Issues
 

@@ -1,14 +1,20 @@
 # core/audio_capture.py
 
+import platform
 import subprocess
 import wave
 import json
 import threading
 import numpy as np
 
+PLATFORM = platform.system()  # 'Linux', 'Windows', 'Darwin'
+
+if PLATFORM == 'Windows':
+    import sounddevice as sd
+
 
 class AudioCapture:
-    """Handles audio recording from PulseAudio sources"""
+    """Handles audio recording — PulseAudio on Linux, WASAPI/sounddevice on Windows"""
 
     def __init__(self, sample_rate=16000, channels=1):
         self.sample_rate = sample_rate
@@ -24,10 +30,24 @@ class AudioCapture:
         self._live_read_pos2 = 0
         self._reader_threads = []
         self._stop_readers = threading.Event()
+        # Windows: sounddevice stream references
+        self._stream1 = None
+        self._stream2 = None
+
+    # ------------------------------------------------------------------ #
+    #  Source listing                                                      #
+    # ------------------------------------------------------------------ #
 
     @staticmethod
     def list_sources():
-        """List all available PulseAudio sources"""
+        """List all available audio sources (platform-aware)."""
+        if PLATFORM == 'Windows':
+            return AudioCapture._list_sources_windows()
+        return AudioCapture._list_sources_linux()
+
+    @staticmethod
+    def _list_sources_linux():
+        """List PulseAudio sources."""
         try:
             result = subprocess.run(
                 ['pactl', '-f', 'json', 'list', 'sources'],
@@ -41,8 +61,115 @@ class AudioCapture:
             print(f"Error listing sources: {e}")
             return []
 
+    @staticmethod
+    def _list_sources_windows():
+        """List audio devices via sounddevice, preferring WASAPI."""
+        devices = sd.query_devices()
+        hostapis = sd.query_hostapis()
+
+        # Find WASAPI host API index
+        wasapi_idx = None
+        for i, api in enumerate(hostapis):
+            if 'WASAPI' in api['name']:
+                wasapi_idx = i
+                break
+
+        # Determine default device names so we can mark them RUNNING
+        default_input_name = None
+        default_output_name = None
+        try:
+            default_input_name = sd.query_devices(kind='input')['name']
+        except Exception:
+            pass
+        try:
+            default_output_name = sd.query_devices(kind='output')['name']
+        except Exception:
+            pass
+
+        sources = []
+        for i, d in enumerate(devices):
+            # Only include WASAPI devices when available
+            if wasapi_idx is not None and d['hostapi'] != wasapi_idx:
+                continue
+
+            # Input devices (microphones)
+            if d['max_input_channels'] > 0:
+                state = 'RUNNING' if d['name'] == default_input_name else 'IDLE'
+                sources.append({
+                    'name': f"input_{i}",
+                    'description': d['name'],
+                    'state': state,
+                    'index': i,
+                    'default_samplerate': d['default_samplerate'],
+                })
+
+            # Output devices exposed as loopback sources
+            if d['max_output_channels'] > 0:
+                state = 'RUNNING' if d['name'] == default_output_name else 'IDLE'
+                sources.append({
+                    'name': f"loopback_{i}",
+                    'description': f"{d['name']} (Loopback)",
+                    'state': state,
+                    'index': i,
+                    'default_samplerate': d['default_samplerate'],
+                })
+
+        return sources
+
+    # ------------------------------------------------------------------ #
+    #  Windows helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _parse_windows_source(source_name):
+        """
+        Parse a Windows source name into (device_index, is_loopback).
+        E.g. 'loopback_5' -> (5, True), 'input_3' -> (3, False).
+        """
+        if source_name.startswith('loopback_'):
+            return int(source_name.split('_', 1)[1]), True
+        elif source_name.startswith('input_'):
+            return int(source_name.split('_', 1)[1]), False
+        else:
+            raise ValueError(f"Unknown Windows source format: {source_name}")
+
+    @staticmethod
+    def _wasapi_extra(is_loopback):
+        """Return WasapiSettings for loopback devices, None otherwise."""
+        if is_loopback:
+            return sd.WasapiSettings(exclusive=False, auto_convert=True)
+        return None
+
+    def _make_sd_callback(self, buffer_list, lock):
+        """Create a sounddevice callback that appends mono int16 bytes to a buffer."""
+        def callback(indata, frames, time_info, status):
+            with lock:
+                buffer_list.append(indata[:, 0].tobytes())
+        return callback
+
+    def _open_sd_stream(self, device_idx, is_loopback, buffer_list, lock):
+        """Open and return a sounddevice InputStream for the given device."""
+        stream = sd.InputStream(
+            device=device_idx,
+            channels=1,
+            samplerate=self.sample_rate,
+            dtype='int16',
+            callback=self._make_sd_callback(buffer_list, lock),
+            extra_settings=self._wasapi_extra(is_loopback),
+        )
+        return stream
+
+    # ------------------------------------------------------------------ #
+    #  Blocking recording (fixed duration)                                 #
+    # ------------------------------------------------------------------ #
+
     def record(self, source_name, duration, output_file):
-        """Record audio from a PulseAudio source to WAV file"""
+        """Record audio from a source to WAV file (blocking)."""
+        if PLATFORM == 'Windows':
+            return self._record_windows(source_name, duration, output_file)
+        return self._record_linux(source_name, duration, output_file)
+
+    def _record_linux(self, source_name, duration, output_file):
         cmd = [
             'parec',
             '--device', source_name,
@@ -50,7 +177,6 @@ class AudioCapture:
             '--rate', str(self.sample_rate),
             '--format', 's16le'
         ]
-
         try:
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
             import time
@@ -70,9 +196,47 @@ class AudioCapture:
             print(f"Recording error: {e}")
             return False
 
+    def _record_windows(self, source_name, duration, output_file):
+        try:
+            device_idx, is_loopback = self._parse_windows_source(source_name)
+            chunks = []
+            lock = threading.Lock()
+
+            def callback(indata, frames, time_info, status):
+                with lock:
+                    chunks.append(indata.copy().tobytes())
+
+            stream = sd.InputStream(
+                device=device_idx,
+                channels=self.channels,
+                samplerate=self.sample_rate,
+                dtype='int16',
+                callback=callback,
+                extra_settings=self._wasapi_extra(is_loopback),
+            )
+            stream.start()
+
+            import time
+            time.sleep(duration)
+
+            stream.stop()
+            stream.close()
+
+            audio_data = b''.join(chunks)
+            with wave.open(output_file, 'wb') as wav_file:
+                wav_file.setnchannels(self.channels)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(audio_data)
+
+            return True
+        except Exception as e:
+            print(f"Recording error: {e}")
+            return False
+
     def record_stereo(self, source1_name, source2_name, duration, output_file):
         """
-        Record from two sources simultaneously and combine into stereo WAV
+        Record from two sources simultaneously and combine into stereo WAV.
 
         Args:
             source1_name: First audio source (e.g., meeting audio) -> Left channel
@@ -83,6 +247,11 @@ class AudioCapture:
         Returns:
             True if successful, False otherwise
         """
+        if PLATFORM == 'Windows':
+            return self._record_stereo_windows(source1_name, source2_name, duration, output_file)
+        return self._record_stereo_linux(source1_name, source2_name, duration, output_file)
+
+    def _record_stereo_linux(self, source1_name, source2_name, duration, output_file):
         cmd1 = [
             'parec',
             '--device', source1_name,
@@ -135,6 +304,62 @@ class AudioCapture:
             print(f"Stereo recording error: {e}")
             return False
 
+    def _record_stereo_windows(self, source1_name, source2_name, duration, output_file):
+        try:
+            idx1, lb1 = self._parse_windows_source(source1_name)
+            idx2, lb2 = self._parse_windows_source(source2_name)
+
+            buf1 = []
+            buf2 = []
+            lock1 = threading.Lock()
+            lock2 = threading.Lock()
+
+            stream1 = self._open_sd_stream(idx1, lb1, buf1, lock1)
+            stream2 = self._open_sd_stream(idx2, lb2, buf2, lock2)
+
+            stream1.start()
+            stream2.start()
+
+            import time
+            time.sleep(duration)
+
+            stream1.stop()
+            stream2.stop()
+            stream1.close()
+            stream2.close()
+
+            with lock1:
+                audio1 = b''.join(buf1)
+            with lock2:
+                audio2 = b''.join(buf2)
+
+            channel1 = np.frombuffer(audio1, dtype=np.int16)
+            channel2 = np.frombuffer(audio2, dtype=np.int16)
+
+            min_len = min(len(channel1), len(channel2))
+            channel1 = channel1[:min_len]
+            channel2 = channel2[:min_len]
+
+            stereo = np.empty((min_len * 2,), dtype=np.int16)
+            stereo[0::2] = channel1
+            stereo[1::2] = channel2
+
+            with wave.open(output_file, 'wb') as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(stereo.tobytes())
+
+            return True
+
+        except Exception as e:
+            print(f"Stereo recording error: {e}")
+            return False
+
+    # ------------------------------------------------------------------ #
+    #  Linux: parec reader thread                                          #
+    # ------------------------------------------------------------------ #
+
     def _reader_thread(self, process, buffer_list, lock, chunk_size=4096):
         """Read from a parec process stdout into a buffer list."""
         try:
@@ -146,6 +371,10 @@ class AudioCapture:
                     buffer_list.append(data)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------ #
+    #  Non-blocking mono recording                                         #
+    # ------------------------------------------------------------------ #
 
     def start_recording_mono(self, source_name, output_file):
         """
@@ -162,6 +391,11 @@ class AudioCapture:
             print("Recording already in progress")
             return False
 
+        if PLATFORM == 'Windows':
+            return self._start_mono_windows(source_name, output_file)
+        return self._start_mono_linux(source_name, output_file)
+
+    def _start_mono_linux(self, source_name, output_file):
         cmd = [
             'parec',
             '--device', source_name,
@@ -196,6 +430,33 @@ class AudioCapture:
             print(f"Error starting recording: {e}")
             return False
 
+    def _start_mono_windows(self, source_name, output_file):
+        try:
+            device_idx, is_loopback = self._parse_windows_source(source_name)
+
+            self._buffer1 = []
+            self._live_read_pos1 = 0
+
+            self._stream1 = self._open_sd_stream(
+                device_idx, is_loopback, self._buffer1, self._buffer1_lock
+            )
+            self._stream2 = None
+            self.process1 = None
+            self.process2 = None
+            self.output_file = output_file
+            self.recording_process = True
+            self._recording_mode = 'mono'
+            self._reader_threads = []
+
+            self._stream1.start()
+
+            print(f"Recording started (mono) -> {output_file}")
+            return True
+
+        except Exception as e:
+            print(f"Error starting recording: {e}")
+            return False
+
     def stop_recording_mono(self):
         """
         Stop mono background recording and save to file.
@@ -203,6 +464,11 @@ class AudioCapture:
         Returns:
             True if stopped and saved successfully, False otherwise
         """
+        if PLATFORM == 'Windows':
+            return self._stop_mono_windows()
+        return self._stop_mono_linux()
+
+    def _stop_mono_linux(self):
         if not hasattr(self, 'process1') or self.process1 is None:
             print("No recording in progress")
             return False
@@ -240,10 +506,49 @@ class AudioCapture:
             print(f"Error stopping recording: {e}")
             return False
 
+    def _stop_mono_windows(self):
+        if self._stream1 is None:
+            print("No recording in progress")
+            return False
+
+        try:
+            self._stream1.stop()
+            self._stream1.close()
+
+            with self._buffer1_lock:
+                audio_data = b''.join(self._buffer1)
+
+            samples = np.frombuffer(audio_data, dtype=np.int16)
+
+            with wave.open(self.output_file, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(samples.tobytes())
+
+            # Cleanup
+            self._stream1 = None
+            self._stream2 = None
+            self.recording_process = None
+            self._recording_mode = None
+            self._buffer1 = []
+
+            print(f"Recording stopped and saved")
+            return True
+
+        except Exception as e:
+            print(f"Error stopping recording: {e}")
+            return False
+
+    # ------------------------------------------------------------------ #
+    #  Non-blocking stereo recording                                       #
+    # ------------------------------------------------------------------ #
+
     def start_recording_stereo(self, source1_name, source2_name, output_file):
         """
         Start stereo recording in background (non-blocking).
-        Uses reader threads to accumulate audio buffers for live preview.
+        Uses reader threads (Linux) or sounddevice callbacks (Windows)
+        to accumulate audio buffers for live preview.
 
         Returns:
             True if started successfully, False otherwise
@@ -252,6 +557,11 @@ class AudioCapture:
             print("Recording already in progress")
             return False
 
+        if PLATFORM == 'Windows':
+            return self._start_stereo_windows(source1_name, source2_name, output_file)
+        return self._start_stereo_linux(source1_name, source2_name, output_file)
+
+    def _start_stereo_linux(self, source1_name, source2_name, output_file):
         cmd1 = [
             'parec',
             '--device', source1_name,
@@ -294,6 +604,39 @@ class AudioCapture:
             t1.start()
             t2.start()
             self._reader_threads = [t1, t2]
+
+            print(f"Recording started -> {output_file}")
+            return True
+
+        except Exception as e:
+            print(f"Error starting recording: {e}")
+            return False
+
+    def _start_stereo_windows(self, source1_name, source2_name, output_file):
+        try:
+            idx1, lb1 = self._parse_windows_source(source1_name)
+            idx2, lb2 = self._parse_windows_source(source2_name)
+
+            self._buffer1 = []
+            self._buffer2 = []
+            self._live_read_pos1 = 0
+            self._live_read_pos2 = 0
+
+            self._stream1 = self._open_sd_stream(
+                idx1, lb1, self._buffer1, self._buffer1_lock
+            )
+            self._stream2 = self._open_sd_stream(
+                idx2, lb2, self._buffer2, self._buffer2_lock
+            )
+            self.process1 = None
+            self.process2 = None
+            self.output_file = output_file
+            self.recording_process = True
+            self._recording_mode = 'stereo'
+            self._reader_threads = []
+
+            self._stream1.start()
+            self._stream2.start()
 
             print(f"Recording started -> {output_file}")
             return True
@@ -360,6 +703,11 @@ class AudioCapture:
         Returns:
             True if stopped and saved successfully, False otherwise
         """
+        if PLATFORM == 'Windows':
+            return self._stop_stereo_windows()
+        return self._stop_stereo_linux()
+
+    def _stop_stereo_linux(self):
         if not hasattr(self, 'process1') or self.process1 is None:
             print("No recording in progress")
             return False
@@ -411,6 +759,59 @@ class AudioCapture:
             print(f"Error stopping recording: {e}")
             return False
 
+    def _stop_stereo_windows(self):
+        if self._stream1 is None:
+            print("No recording in progress")
+            return False
+
+        try:
+            self._stream1.stop()
+            self._stream2.stop()
+            self._stream1.close()
+            self._stream2.close()
+
+            # Combine buffered data
+            with self._buffer1_lock:
+                audio_data1 = b''.join(self._buffer1)
+            with self._buffer2_lock:
+                audio_data2 = b''.join(self._buffer2)
+
+            channel1 = np.frombuffer(audio_data1, dtype=np.int16)
+            channel2 = np.frombuffer(audio_data2, dtype=np.int16)
+
+            min_len = min(len(channel1), len(channel2))
+            channel1 = channel1[:min_len]
+            channel2 = channel2[:min_len]
+
+            stereo = np.empty((min_len * 2,), dtype=np.int16)
+            stereo[0::2] = channel1
+            stereo[1::2] = channel2
+
+            with wave.open(self.output_file, 'wb') as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(stereo.tobytes())
+
+            # Cleanup
+            self._stream1 = None
+            self._stream2 = None
+            self.recording_process = None
+            self._recording_mode = None
+            self._buffer1 = []
+            self._buffer2 = []
+
+            print(f"Recording stopped and saved")
+            return True
+
+        except Exception as e:
+            print(f"Error stopping recording: {e}")
+            return False
+
+    # ------------------------------------------------------------------ #
+    #  Source classification for GUI / CLI                                  #
+    # ------------------------------------------------------------------ #
+
     @staticmethod
     def get_sources_for_gui():
         """
@@ -420,7 +821,7 @@ class AudioCapture:
             dict with 'monitors' and 'inputs' lists, each containing:
             - display_name: User-friendly description
             - device_name: Technical name for recording
-            - state: RUNNING/SUSPENDED
+            - state: RUNNING/SUSPENDED/IDLE
         """
         sources = AudioCapture.list_sources()
 
@@ -438,7 +839,9 @@ class AudioCapture:
                 'state': state
             }
 
-            if '.monitor' in name:
+            # Linux: PulseAudio monitors contain '.monitor'
+            # Windows: loopback sources start with 'loopback_'
+            if '.monitor' in name or name.startswith('loopback_'):
                 monitors.append(item)
             elif 'input' in name or 'source' in name.lower():
                 inputs.append(item)
@@ -451,10 +854,12 @@ class AudioCapture:
     @staticmethod
     def find_active_sources():
         """
-        Find currently active (RUNNING) sources
+        Find currently active (RUNNING) sources.
+        On Linux, detects actively used PulseAudio sources.
+        On Windows, returns the default WASAPI input/output devices.
 
         Returns:
-            dict with 'active_monitor' and 'active_input' (or None if none running)
+            dict with 'active_monitor' and 'active_input' (or None if none found)
         """
         data = AudioCapture.get_sources_for_gui()
 
