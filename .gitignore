@@ -1,4 +1,8 @@
 .env
+__pycache__/
+*.pyc
+.idea/
+installer/*.log
 /test_capture.wav
 /class_test.wav
 /mic_test.wav

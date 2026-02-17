@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import wave
+import webbrowser
 import threading
 import traceback
 from datetime import datetime
@@ -14,6 +15,9 @@ from flask import Flask, render_template, request, jsonify, Response
 # Add parent dir to path so we can import core modules
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
+
+# Relocatable data directory (recordings output)
+DATA_DIR = os.environ.get('CENARIO_DATA_DIR', os.path.join(BASE_DIR, 'recordings'))
 
 from core.audio_capture import AudioCapture
 from core.transcriber import Transcriber
@@ -62,13 +66,15 @@ def _get_hf_token():
     token = os.environ.get('HF_TOKEN')
     if token:
         return token
-    env_path = os.path.join(BASE_DIR, '.env')
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('HF_TOKEN='):
-                    return line.split('=', 1)[1].strip().strip('"').strip("'")
+    # Check .env in BASE_DIR, then parent (install root)
+    for env_dir in [BASE_DIR, os.path.dirname(BASE_DIR)]:
+        env_path = os.path.join(env_dir, '.env')
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('HF_TOKEN='):
+                        return line.split('=', 1)[1].strip().strip('"').strip("'")
     return None
 
 
@@ -107,7 +113,7 @@ def api_sources():
 @app.route('/api/recordings')
 def api_recordings():
     """List WAV files in recordings directory."""
-    rec_dir = os.path.join(BASE_DIR, 'recordings')
+    rec_dir = DATA_DIR
     if not os.path.exists(rec_dir):
         return jsonify([])
     files = []
@@ -142,7 +148,7 @@ def api_folders():
         else:
             rec_dir = os.path.join(BASE_DIR, base)
     else:
-        rec_dir = os.path.join(BASE_DIR, 'recordings')
+        rec_dir = DATA_DIR
     if not os.path.exists(rec_dir):
         return jsonify([])
     folders = []
@@ -530,7 +536,7 @@ def api_transcriptions():
     """List available transcription JSON files across known directories."""
     # Scan the default recordings dir plus any custom output folder from the UI
     dirs_to_scan = set()
-    default_dir = os.path.join(BASE_DIR, 'recordings')
+    default_dir = DATA_DIR
     dirs_to_scan.add(default_dir)
 
     # Include the folder from the output folder input if provided
@@ -820,7 +826,7 @@ def api_summarize_export_markdown():
     else:
         # Fallback
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        md_path = os.path.join(BASE_DIR, 'recordings', f'summary_{timestamp}.md')
+        md_path = os.path.join(DATA_DIR, f'summary_{timestamp}.md')
 
     try:
         with open(md_path, 'w', encoding='utf-8') as f:
@@ -831,4 +837,14 @@ def api_summarize_export_markdown():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True, use_reloader=False)
+    port = int(os.environ.get('CENARIO_PORT', 5000))
+    debug = os.environ.get('CENARIO_DEBUG', '0') == '1'
+
+    if not os.environ.get('CENARIO_NO_BROWSER'):
+        def _open_browser():
+            import time
+            time.sleep(1.5)
+            webbrowser.open(f'http://localhost:{port}')
+        threading.Thread(target=_open_browser, daemon=True).start()
+
+    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True, use_reloader=False)

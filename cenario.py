@@ -25,13 +25,16 @@ def _get_hf_token():
     token = os.environ.get('HF_TOKEN')
     if token:
         return token
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('HF_TOKEN='):
-                    return line.split('=', 1)[1].strip().strip('"').strip("'")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Check .env in script dir, then parent (install root)
+    for env_dir in [script_dir, os.path.dirname(script_dir)]:
+        env_path = os.path.join(env_dir, '.env')
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('HF_TOKEN='):
+                        return line.split('=', 1)[1].strip().strip('"').strip("'")
     return None
 
 
@@ -182,9 +185,10 @@ def cmd_record(args):
     """Record with live preview, post-process, and export."""
     local_mode = getattr(args, 'local', False)
 
-    os.makedirs('recordings', exist_ok=True)
+    rec_dir = os.environ.get('CENARIO_DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recordings'))
+    os.makedirs(rec_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_file = os.path.join('recordings', f'{timestamp}.wav')
+    output_file = os.path.join(rec_dir, f'{timestamp}.wav')
 
     capture = AudioCapture(sample_rate=16000)
 
