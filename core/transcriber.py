@@ -11,7 +11,11 @@ import time
 class Transcriber:
     """Handles speech-to-text transcription using faster-whisper"""
 
-    def __init__(self, device="cuda", compute_type="float16"):
+    def __init__(self, device=None, compute_type=None):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if compute_type is None:
+            compute_type = "float16" if device == "cuda" else "int8"
         self.device = device
         self.compute_type = compute_type
         self.model = None
@@ -26,14 +30,31 @@ class Transcriber:
         if self.model is not None:
             self.unload_model()
 
-        print(f"Loading Whisper model: {model_size}...")
-        self.model = WhisperModel(
-            model_size,
-            device=self.device,
-            compute_type=self.compute_type
-        )
-        self.current_model_size = model_size
-        print(f"Model '{model_size}' loaded")
+        # Try loading with fallback: cuda/float16 -> cuda/int8 -> cpu/int8
+        attempts = [(self.device, self.compute_type)]
+        if self.device == "cuda" and self.compute_type == "float16":
+            attempts.append(("cuda", "int8"))
+        if self.device == "cuda":
+            attempts.append(("cpu", "int8"))
+
+        for device, compute_type in attempts:
+            try:
+                print(f"Loading Whisper model: {model_size} (device={device}, compute={compute_type})...")
+                self.model = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=compute_type
+                )
+                self.device = device
+                self.compute_type = compute_type
+                self.current_model_size = model_size
+                print(f"Model '{model_size}' loaded on {device} with {compute_type}")
+                return
+            except ValueError as e:
+                print(f"Failed ({device}/{compute_type}): {e}")
+                continue
+
+        raise RuntimeError(f"Could not load Whisper model '{model_size}' with any device/compute combination")
 
     def unload_model(self):
         """Free the Whisper model and release GPU memory."""
