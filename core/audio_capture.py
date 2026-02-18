@@ -227,6 +227,7 @@ class AudioCapture:
             input=True,
             input_device_index=device_idx,
             stream_callback=callback,
+            start=False,
         )
         return stream
 
@@ -249,6 +250,14 @@ class AudioCapture:
             stream.close()
         except Exception as e:
             print(f"Warning: stream close failed: {e}")
+
+    @staticmethod
+    def _start_stream(stream):
+        """Start a stream (sounddevice or pyaudio)."""
+        if hasattr(stream, 'start_stream'):
+            stream.start_stream()  # pyaudio
+        else:
+            stream.start()  # sounddevice
 
     def _cleanup_pyaudio(self):
         """Terminate the PyAudio instance if no streams are active."""
@@ -308,7 +317,7 @@ class AudioCapture:
                 stream = self._open_sd_stream(
                     device_idx, is_loopback, chunks, lock
                 )
-            stream.start()
+            self._start_stream(stream)
 
             import time
             time.sleep(duration)
@@ -417,8 +426,8 @@ class AudioCapture:
             else:
                 stream2 = self._open_sd_stream(idx2, lb2, buf2, lock2)
 
-            stream1.start()
-            stream2.start()
+            self._start_stream(stream1)
+            self._start_stream(stream2)
 
             import time
             time.sleep(duration)
@@ -552,7 +561,7 @@ class AudioCapture:
             self._recording_mode = 'mono'
             self._reader_threads = []
 
-            self._stream1.start()
+            self._start_stream(self._stream1)
 
             print(f"Recording started (mono) -> {output_file}")
             return True
@@ -756,8 +765,8 @@ class AudioCapture:
             self._recording_mode = 'stereo'
             self._reader_threads = []
 
-            self._stream1.start()
-            self._stream2.start()
+            self._start_stream(self._stream1)
+            self._start_stream(self._stream2)
 
             print(f"Recording started -> {output_file}")
             return True
