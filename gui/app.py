@@ -213,11 +213,17 @@ def api_record_start():
     safe_meeting_name = meeting_name.replace(' ', '_')
     
     folder_name = f'{safe_meeting_name}_{timestamp}' if safe_meeting_name else f'{timestamp}'
-    rec_dir = os.path.join(base_rec_dir, folder_name)
-    os.makedirs(rec_dir, exist_ok=True)
+    
+    if _preview_only:
+        import tempfile
+        fd, _output_file = tempfile.mkstemp(suffix='.wav')
+        os.close(fd)
+    else:
+        rec_dir = os.path.join(base_rec_dir, folder_name)
+        os.makedirs(rec_dir, exist_ok=True)
 
-    filename = f'{folder_name}.wav'
-    _output_file = os.path.join(rec_dir, filename)
+        filename = f'{folder_name}.wav'
+        _output_file = os.path.join(rec_dir, filename)
 
     _capture = AudioCapture(sample_rate=16000)
     _recording_mode = mode
@@ -376,15 +382,16 @@ def api_postprocess_start():
                     intermediate = event.get('result')
                     if intermediate:
                         _post['result'] = intermediate
-                        base = os.path.splitext(file_path)[0]
-                        try:
-                            Exporter.to_txt(intermediate, base + '_transcription.txt')
-                            Exporter.to_json(intermediate, base + '_transcription.json')
-                            _emit({'type': 'transcription_saved',
-                                   'files': [base + '_transcription.txt',
-                                             base + '_transcription.json']})
-                        except Exception as e:
-                            print(f"Error saving intermediate: {e}")
+                        if diarize:
+                            base = os.path.splitext(file_path)[0]
+                            try:
+                                Exporter.to_txt(intermediate, base + '_transcription.txt')
+                                Exporter.to_json(intermediate, base + '_transcription.json')
+                                _emit({'type': 'transcription_saved',
+                                       'files': [base + '_transcription.txt',
+                                                 base + '_transcription.json']})
+                            except Exception as e:
+                                print(f"Error saving intermediate: {e}")
                     _emit({'type': 'status', 'status': 'transcription_done'})
                 elif evt_type == 'status':
                     _post['status'] = event.get('status', _post['status'])
@@ -840,6 +847,17 @@ def api_summarize_export_markdown():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/update', methods=['POST'])
+def api_update():
+    """Trigger the updater script."""
+    try:
+        import subprocess
+        # Run updater.py in a separate process
+        updater_path = os.path.join(BASE_DIR, 'updater.py')
+        subprocess.Popen([sys.executable, updater_path], cwd=BASE_DIR)
+        return jsonify({'status': 'started'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('CENARIO_PORT', 5000))

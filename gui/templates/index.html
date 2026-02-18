@@ -213,7 +213,10 @@
 </head>
 <body>
 
-<h1>Cenario</h1>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <h1 style="margin:0;">Cenario</h1>
+    <button class="btn-action" onclick="checkForUpdates()">Check for Updates</button>
+</div>
 
 <!-- Meeting Setup -->
 <div class="card">
@@ -556,6 +559,22 @@
                 micSel.appendChild(opt);
             });
             if (!data.inputs.length) micSel.innerHTML = '<option value="">No inputs found</option>';
+
+            // Restore previous selection if available
+            const savedMonitor = localStorage.getItem('cenario_last_monitor');
+            if (savedMonitor) {
+                // Check if option exists
+                if ([...monitorSel.options].some(o => o.value === savedMonitor)) {
+                    monitorSel.value = savedMonitor;
+                }
+            }
+            const savedMic = localStorage.getItem('cenario_last_mic');
+            if (savedMic) {
+                if ([...micSel.options].some(o => o.value === savedMic)) {
+                    micSel.value = savedMic;
+                }
+            }
+
         } catch (e) {
             console.error('Failed to load sources:', e);
         }
@@ -660,6 +679,10 @@
         const meetingName = document.getElementById('meetingName').value;
         const outputFolder = document.getElementById('outputFolder').value;
         const language = document.getElementById('language').value;
+
+        // Save selection
+        if (monitor) localStorage.setItem('cenario_last_monitor', monitor);
+        if (mic) localStorage.setItem('cenario_last_mic', mic);
 
         const body = {
             mode, mic, live_model: liveModel, chunk,
@@ -1201,6 +1224,21 @@
             }
         } catch (e) {
             // Server not running or no previous state
+        }
+    }
+
+    // ---- Updates ----
+    async function checkForUpdates() {
+        try {
+            const resp = await fetch('/api/update', { method: 'POST' });
+            const data = await resp.json();
+            if (data.status === 'started') {
+                alert('Update check started in background. Check console output.');
+            } else {
+                alert('Error starting update: ' + data.error);
+            }
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     }
 
