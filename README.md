@@ -57,8 +57,6 @@ If PowerShell blocks script execution, run: `Set-ExecutionPolicy -ExecutionPolic
 
 ## Usage
 
-## Usage
-
 ### GUI (Web Interface)
 
 ```bash
