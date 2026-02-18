@@ -24,41 +24,58 @@ Cenario is a local, privacy-focused meeting transcription and summarization tool
 *   **OS**: Linux (PulseAudio/PipeWire) or Windows (WASAPI)
 *   **GPU**: NVIDIA GPU with CUDA support recommended (4GB+ VRAM for summarization).
 *   **Python**: 3.8+
-*   **System Dependencies (Linux)**: `portaudio19-dev`, `python3-dev`
-*   **System Dependencies (Windows)**: None — `sounddevice` handles audio via WASAPI
 
 ## Installation
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/yourusername/cenario.git
-    cd cenario
-    ```
+### Linux
 
-2.  **Install Python dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *(Note: You may need to install PyTorch separately to match your CUDA version)*
+```bash
+# Default install to ~/cenario
+bash installer/install.sh
+
+# Custom location
+bash installer/install.sh --install-dir /opt/cenario
+
+# Force CPU-only (skip CUDA detection)
+bash installer/install.sh --cpu-only
+```
+
+### Windows (PowerShell)
+
+```powershell
+# Default install to %USERPROFILE%\cenario
+.\installer\install.ps1
+
+# Custom location
+.\installer\install.ps1 -InstallDir C:\cenario
+
+# Force CPU-only
+.\installer\install.ps1 -CpuOnly
+```
+
+If PowerShell blocks script execution, run: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ## Usage
 
-### Web Interface (GUI)
+## Usage
 
-The easiest way to use Cenario is via the web interface.
+### GUI (Web Interface)
 
-1.  Start the server:
-    ```bash
-    python gui/app.py
-    ```
-2.  Open your browser and navigate to `http://localhost:5000`.
+```bash
+# Linux
+~/cenario/cenario-gui
+
+# Windows
+%USERPROFILE%\cenario\cenario-gui.bat
+```
+
+The browser opens automatically. To disable: set `CENARIO_NO_BROWSER=1` in the `.env` file or environment.
 
 **Workflow**:
-1.  **Meeting Setup**: Choose your language and mode (Online/Stereo or Local/Mono).
+1.  **Meeting Setup**: Choose your language and mode (Online or Local).
 2.  **Source Selection**: Select your microphone and system monitor (for online meetings).
 3.  **Recording**: Start recording. You'll see a live text preview.
-4.  **Post-Processing**: After stopping, select the file and run transcription (with optional diarization).
-5.  **Speaker Naming**: (Optional) Rename "SPEAKER_00", "SPEAKER_01" to actual names.
+4.  **Post-Processing**: After stopping, select the file and run transcription.
 6.  **Summarization**: Generate a summary and action points using the local LLM.
 7.  **Export**: Download your files.
 
