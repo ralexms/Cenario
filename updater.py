@@ -63,7 +63,7 @@ def download_and_extract(url):
                 d = os.path.join(APP_DIR, item)
                 
                 # Skip unnecessary files/folders
-                if item in ['.git', '.github', '.gitignore', 'installer', 'README.md', 'requirements.txt']:
+                if item in ['.git', '.github', '.gitignore', 'README.md', 'requirements.txt']:
                     continue
                 
                 if os.path.isdir(s):
@@ -72,19 +72,6 @@ def download_and_extract(url):
                     shutil.copytree(s, d)
                 else:
                     shutil.copy2(s, d)
-
-            # Install any new/updated pip dependencies
-            req_file = os.path.join(source_dir, 'installer', 'requirements-pip.txt')
-            if os.path.exists(req_file):
-                print("Installing/updating dependencies...")
-                try:
-                    subprocess.run(
-                        [sys.executable, '-m', 'pip', 'install', '-r', req_file, '--quiet'],
-                        check=True,
-                    )
-                    print("Dependencies updated.")
-                except Exception as e:
-                    print(f"Warning: dependency installation failed: {e}")
 
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -95,6 +82,21 @@ def download_and_extract(url):
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         return False
+
+def install_requirements():
+    """Install pip dependencies from the deployed requirements file."""
+    req_file = os.path.join(APP_DIR, 'installer', 'requirements-pip.txt')
+    if not os.path.exists(req_file):
+        return
+    print("Installing/updating dependencies...")
+    try:
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '-r', req_file, '--quiet'],
+            check=True,
+        )
+        print("Dependencies updated.")
+    except Exception as e:
+        print(f"Warning: dependency installation failed: {e}")
 
 def update():
     print("Checking for updates...")
@@ -123,6 +125,7 @@ def update():
         zip_url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{latest}.zip"
 
     if download_and_extract(zip_url):
+        install_requirements()
         print("Update successful! Please restart the application.")
         with open(VERSION_FILE, 'w') as f:
             f.write(latest)
