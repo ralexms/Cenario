@@ -18,6 +18,103 @@ if PLATFORM == 'Windows':
         _HAS_PYAUDIOWPATCH = False
 
 
+class _LoopbackCapture:
+    """Thread-based WASAPI loopback capture via pyaudiowpatch.
+
+    Uses blocking reads in a daemon thread instead of PortAudio callbacks
+    to avoid native segfaults when closing a stream while audio is active.
+    Exposes start/stop/close/active matching the sounddevice API so the
+    rest of AudioCapture can treat it like any other stream.
+    """
+
+    def __init__(self, pa_instance, device_idx, target_rate, buffer_list, lock):
+        dev = pa_instance.get_device_info_by_index(device_idx)
+        self._channels = dev['maxInputChannels']
+        self._native_rate = int(dev['defaultSampleRate'])
+        self._target_rate = target_rate
+        self._buffer_list = buffer_list
+        self._lock = lock
+        self._stop_event = threading.Event()
+        self._thread = None
+        self.active = False
+
+        self._stream = pa_instance.open(
+            format=pyaudio.paInt16,
+            channels=self._channels,
+            rate=self._native_rate,
+            input=True,
+            input_device_index=device_idx,
+            frames_per_buffer=1024,
+            start=False,
+        )
+
+    def start(self):
+        self.active = True
+        self._stop_event.clear()
+        self._stream.start_stream()
+        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        if not self.active:
+            return
+        self._stop_event.set()
+        # stop_stream unblocks any pending read() call
+        try:
+            self._stream.stop_stream()
+        except Exception:
+            pass
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+        self.active = False
+
+    def close(self):
+        self.stop()
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+
+    def _reader(self):
+        chunk = 1024
+        channels = self._channels
+        native_rate = self._native_rate
+        target_rate = self._target_rate
+
+        while not self._stop_event.is_set():
+            try:
+                data = self._stream.read(chunk, exception_on_overflow=False)
+            except Exception:
+                if self._stop_event.is_set():
+                    break
+                import time
+                time.sleep(0.01)
+                continue
+
+            arr = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
+            mono = _downmix_to_mono_int16(arr)
+
+            if native_rate != target_rate and len(mono) > 0:
+                n_out = int(len(mono) * target_rate / native_rate)
+                if n_out > 0:
+                    mono = np.interp(
+                        np.linspace(0, len(mono) - 1, n_out),
+                        np.arange(len(mono)),
+                        mono.astype(np.float64),
+                    ).astype(np.int16)
+
+            with self._lock:
+                self._buffer_list.append(mono.tobytes())
+
+
+def _downmix_to_mono_int16(indata):
+    """Downmix multi-channel int16 input to mono, avoiding overflow."""
+    if indata.shape[1] == 1:
+        return indata[:, 0]
+    return indata.astype(np.int32).mean(axis=1).astype(np.int16)
+
+
 class AudioCapture:
     """Handles audio recording — PulseAudio on Linux, WASAPI/sounddevice on Windows"""
 
@@ -39,7 +136,6 @@ class AudioCapture:
         self._stream1 = None
         self._stream2 = None
         self._pyaudio = None  # pyaudiowpatch instance (loopback only)
-        self._stopping = False  # signal loopback callbacks to stop
 
     # ------------------------------------------------------------------ #
     #  Source listing                                                      #
@@ -168,18 +264,8 @@ class AudioCapture:
 
     @staticmethod
     def _downmix_to_mono_int16(indata):
-        """Downmix multi-channel int16 input to mono, avoiding overflow.
-
-        Args:
-            indata: numpy array of shape (frames, channels), dtype int16
-        Returns:
-            1-D numpy array of int16 mono samples
-        """
-        if indata.shape[1] == 1:
-            return indata[:, 0]
-        # Use int32 intermediate to avoid int16 overflow when summing channels
-        mixed = indata.astype(np.int32).mean(axis=1).astype(np.int16)
-        return mixed
+        """Downmix multi-channel int16 input to mono, avoiding overflow."""
+        return _downmix_to_mono_int16(indata)
 
     def _make_sd_callback(self, buffer_list, lock):
         """Create a sounddevice callback that appends mono int16 bytes to a buffer."""
@@ -204,47 +290,14 @@ class AudioCapture:
     def _open_loopback_stream(self, device_idx, buffer_list, lock):
         """Open a WASAPI loopback stream via pyaudiowpatch.
 
-        Returns a pyaudio stream object. The caller must keep the PyAudio
-        instance alive (stored in self._pyaudio).
+        Returns a _LoopbackCapture wrapper that uses thread-based blocking
+        reads instead of PortAudio callbacks (avoids native crash on close).
         """
         if self._pyaudio is None:
             self._pyaudio = pyaudio.PyAudio()
-        dev = self._pyaudio.get_device_info_by_index(device_idx)
-        channels = dev['maxInputChannels']
-        native_rate = int(dev['defaultSampleRate'])
-        target_rate = self.sample_rate
-
-        def callback(in_data, frame_count, time_info, status):
-            if self._stopping:
-                return (None, pyaudio.paComplete)
-            # in_data is raw bytes — multi-channel int16
-            arr = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
-            mono = AudioCapture._downmix_to_mono_int16(arr)
-            # Resample from device native rate to target rate
-            if native_rate != target_rate and len(mono) > 0:
-                n_out = int(len(mono) * target_rate / native_rate)
-                if n_out > 0:
-                    mono = np.interp(
-                        np.linspace(0, len(mono) - 1, n_out),
-                        np.arange(len(mono)),
-                        mono.astype(np.float64),
-                    ).astype(np.int16)
-                else:
-                    return (None, pyaudio.paContinue)
-            with lock:
-                buffer_list.append(mono.tobytes())
-            return (None, pyaudio.paContinue)
-
-        stream = self._pyaudio.open(
-            format=pyaudio.paInt16,
-            channels=channels,
-            rate=native_rate,
-            input=True,
-            input_device_index=device_idx,
-            stream_callback=callback,
-            start=False,
+        return _LoopbackCapture(
+            self._pyaudio, device_idx, self.sample_rate, buffer_list, lock,
         )
-        return stream
 
     @staticmethod
     def _safe_close_stream(stream):
@@ -273,28 +326,6 @@ class AudioCapture:
             stream.start_stream()  # pyaudio
         else:
             stream.start()  # sounddevice
-
-    def _deactivate_loopback_streams(self):
-        """Signal loopback callbacks to stop and wait for streams to deactivate.
-
-        Must be called BEFORE _safe_close_stream so that PortAudio is not
-        tearing down a stream while its callback is still running.
-        """
-        import time
-        self._stopping = True
-        for stream in (self._stream1, self._stream2):
-            if stream is None:
-                continue
-            # Only pyaudio streams need deactivation (identified by stop_stream)
-            if not hasattr(stream, 'stop_stream'):
-                continue
-            for _ in range(20):  # up to 1 second
-                try:
-                    if not stream.is_active():
-                        break
-                except Exception:
-                    break
-                time.sleep(0.05)
 
     def _cleanup_pyaudio(self):
         """Terminate the PyAudio instance if no streams are active."""
@@ -682,9 +713,6 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Wait for loopback callbacks to finish before closing streams
-        self._deactivate_loopback_streams()
-
         self._safe_close_stream(self._stream1)
 
         # Unconditional cleanup
@@ -693,7 +721,6 @@ class AudioCapture:
         self.recording_process = None
         self._recording_mode = None
         self._buffer1 = []
-        self._stopping = False
         self._cleanup_pyaudio()
 
         return saved
@@ -973,10 +1000,6 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Wait for loopback callbacks to finish before closing streams —
-        # avoids PortAudio crash from closing a stream mid-callback.
-        self._deactivate_loopback_streams()
-
         self._safe_close_stream(self._stream1)
         self._safe_close_stream(self._stream2)
 
@@ -987,7 +1010,6 @@ class AudioCapture:
         self._recording_mode = None
         self._buffer1 = []
         self._buffer2 = []
-        self._stopping = False
         self._cleanup_pyaudio()
 
         return saved
