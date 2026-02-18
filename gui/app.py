@@ -338,6 +338,7 @@ def api_postprocess_start():
     language = body.get('language') or None
     beam_size = body.get('beam_size', 5)
     vad_filter = body.get('vad_filter', False)
+    stereo_mode = body.get('stereo_mode', 'joint') # Default to joint
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -402,7 +403,8 @@ def api_postprocess_start():
                     file_path, model_size=model_size,
                     hf_token=hf_token if diarize else None,
                     language=language, on_progress=on_progress,
-                    beam_size=beam_size, vad_filter=vad_filter)
+                    beam_size=beam_size, vad_filter=vad_filter,
+                    stereo_mode=stereo_mode)
             else:
                 if diarize and hf_token:
                     result = transcriber.transcribe_with_diarization(

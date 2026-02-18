@@ -343,10 +343,19 @@
                 <input type="number" id="beamSize" value="5" min="1" max="20">
             </div>
         </div>
-        <div class="row" style="margin-bottom:12px;">
+        <div class="row hidden" style="margin-bottom:12px;">
             <div style="display:flex;gap:16px;align-items:end;padding-bottom:10px;">
                 <label style="margin:0;color:#777;cursor:not-allowed;"><input type="checkbox" id="chkDiarize" disabled> Diarization (Disabled)</label>
                 <label style="margin:0;color:#777;cursor:not-allowed;"><input type="checkbox" id="chkVadFilter" disabled> VAD Filter (Disabled)</label>
+            </div>
+        </div>
+        <div class="row hidden" style="margin-bottom:12px;">
+            <div>
+                <label for="stereoMode">Stereo Mode</label>
+                <select id="stereoMode">
+                    <option value="joint" selected>Joint (Single Output)</option>
+                    <option value="separate">Separate Channels</option>
+                </select>
             </div>
         </div>
         <div class="controls" style="margin-bottom:8px;">
@@ -358,20 +367,22 @@
         <div id="postOutput" class="output-area"></div>
         <div id="postWarnings"></div>
 
-        <h3 style="margin-top: 20px;">Speaker Naming</h3>
-        <div class="row" style="margin-bottom:12px;">
-            <div>
-                <label for="speakerFile">Transcription File</label>
-                <select id="speakerFile"><option value="">No transcriptions found</option></select>
+        <div class="hidden">
+            <h3 style="margin-top: 20px;">Speaker Naming</h3>
+            <div class="row" style="margin-bottom:12px;">
+                <div>
+                    <label for="speakerFile">Transcription File</label>
+                    <select id="speakerFile"><option value="">No transcriptions found</option></select>
+                </div>
+                <div style="display:flex;align-items:end;padding-bottom:10px;">
+                    <button class="btn-action" onclick="loadSpeakers()">Load Speakers</button>
+                </div>
             </div>
-            <div style="display:flex;align-items:end;padding-bottom:10px;">
-                <button class="btn-action" onclick="loadSpeakers()">Load Speakers</button>
+            <div id="speakerList"></div>
+            <div id="speakerActions" class="hidden" style="margin-top:12px;">
+                <button class="btn-start" onclick="applySpeakerNames()">Apply Names &amp; Re-export</button>
+                <span id="speakerStatus" class="info"></span>
             </div>
-        </div>
-        <div id="speakerList"></div>
-        <div id="speakerActions" class="hidden" style="margin-top:12px;">
-            <button class="btn-start" onclick="applySpeakerNames()">Apply Names &amp; Re-export</button>
-            <span id="speakerStatus" class="info"></span>
         </div>
 
 <!--        <h3 style="margin-top: 20px;">Export</h3>-->
@@ -746,6 +757,7 @@
         const model = document.getElementById('postModel').value;
         const diarize = document.getElementById('chkDiarize').checked;
         const language = document.getElementById('language').value;
+        const stereoMode = document.getElementById('stereoMode').value;
 
         document.getElementById('postOutput').innerHTML = '';
         document.getElementById('postWarnings').innerHTML = '';
@@ -765,7 +777,8 @@
                 body: JSON.stringify({
                     file, model, diarize, language,
                     beam_size: parseInt(document.getElementById('beamSize').value) || 5,
-                    vad_filter: document.getElementById('chkVadFilter').checked
+                    vad_filter: document.getElementById('chkVadFilter').checked,
+                    stereo_mode: stereoMode
                 })
             });
             const data = await resp.json();

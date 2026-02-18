@@ -158,7 +158,7 @@ class Transcriber:
 
     def transcribe_stereo(self, audio_file, model_size="small", hf_token=None,
                           language=None, on_progress=None,
-                          beam_size=5, vad_filter=False):
+                          beam_size=5, vad_filter=False, stereo_mode="joint"):
         """
         Transcribe stereo file by splitting channels, with optional diarization.
 
@@ -170,10 +170,36 @@ class Transcriber:
             on_progress: Callback for progress events
             beam_size: Beam size for decoding (higher = better but slower)
             vad_filter: Enable voice activity detection filtering
+            stereo_mode: "joint" (default) or "separate"
 
         Returns:
-            dict with 'left_channel' and 'right_channel' transcriptions
+            dict with transcription results
         """
+        if stereo_mode == "joint":
+            if hf_token:
+                return self.transcribe_with_diarization(
+                    audio_file, model_size=model_size, hf_token=hf_token,
+                    language=language, on_progress=on_progress,
+                    beam_size=beam_size, vad_filter=vad_filter
+                )
+            else:
+                if on_progress:
+                    on_progress({'type': 'status', 'status': 'transcribing'})
+
+                def seg_cb(seg):
+                    if on_progress:
+                        on_progress({'type': 'segment', **seg})
+
+                print("Transcribing stereo file (joint)...")
+                result = self.transcribe(audio_file, model_size, language=language,
+                                         on_segment=seg_cb, beam_size=beam_size,
+                                         vad_filter=vad_filter)
+                
+                if on_progress:
+                    on_progress({'type': 'transcription_done', 'result': result})
+                
+                return result
+
         import wave
         import numpy as np
         import os
