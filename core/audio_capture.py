@@ -59,14 +59,22 @@ class _LoopbackCapture:
         if not self.active:
             return
         self._stop_event.set()
-        # Note: We do NOT call stop_stream() here because it can cause a native
-        # crash if called while the reader thread is actively reading.
-        # Instead, we rely on the reader thread polling get_read_available()
-        # and exiting the loop when it sees _stop_event set.
         
+        # Wait for the reader thread to exit.
+        # The reader thread polls get_read_available() so it should exit quickly
+        # without blocking in read().
         if self._thread:
             self._thread.join(timeout=2)
             self._thread = None
+            
+        # Now that the reader thread has exited, it is safe to stop the stream.
+        # This avoids closing a running stream (which can crash) and avoids
+        # stopping a stream while read() is active (which can also crash).
+        try:
+            self._stream.stop_stream()
+        except Exception:
+            pass
+
         self.active = False
 
     def close(self):
