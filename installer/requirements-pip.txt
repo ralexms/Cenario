@@ -6,6 +6,7 @@ accelerate==1.12.0
 sounddevice==0.5.5
 soundfile==0.13.1
 PyAudioWPatch>=0.2.12.6; sys_platform == "win32"
+pycaw>=20230407; sys_platform == "win32"
 flask>=3.1.0
 pyannote-audio==3.1.1
 python-dotenv==1.2.1

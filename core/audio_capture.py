@@ -16,6 +16,13 @@ if PLATFORM == 'Windows':
         _HAS_PYAUDIOWPATCH = True
     except ImportError:
         _HAS_PYAUDIOWPATCH = False
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        from ctypes import cast, POINTER
+        _HAS_PYCAW = True
+    except ImportError:
+        _HAS_PYCAW = False
 
 
 class _LoopbackCapture:
@@ -388,6 +395,58 @@ class AudioCapture:
             except Exception:
                 pass
             self._pyaudio = None
+
+    @staticmethod
+    def _mute_outputs():
+        """Mute default output device. Returns state for _restore_outputs."""
+        if not _HAS_PYCAW:
+            return []
+        saved = []
+        try:
+            speakers = AudioUtilities.GetSpeakers()
+            interface = speakers.Activate(
+                IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+            )
+            volume = cast(interface, POINTER(IAudioEndpointVolume))
+            was_muted = volume.GetMute()
+            if not was_muted:
+                volume.SetMute(1, None)
+            saved.append((volume, was_muted))
+        except Exception:
+            pass
+        return saved
+
+    @staticmethod
+    def _restore_outputs(saved):
+        """Restore mute state saved by _mute_outputs."""
+        for volume, was_muted in saved:
+            try:
+                if not was_muted:
+                    volume.SetMute(0, None)
+            except Exception:
+                pass
+
+    def _close_loopbacks_with_mute(self, streams):
+        """Close WASAPI loopback streams, muting outputs first to prevent crash.
+
+        When audio is actively playing through speakers, closing a WASAPI
+        loopback stream can cause a PortAudio segfault.  Briefly muting the
+        output drains the loopback buffer so the close is safe.
+        """
+        import time
+        # Stop reader threads (but leave underlying PA streams open)
+        for s in streams:
+            s.stop()
+        saved_mute = self._mute_outputs()
+        try:
+            time.sleep(1)
+            for s in streams:
+                try:
+                    s._stream.close()
+                except Exception:
+                    pass
+        finally:
+            self._restore_outputs(saved_mute)
 
     # ------------------------------------------------------------------ #
     #  Blocking recording (fixed duration)                                 #
@@ -767,7 +826,10 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        self._safe_close_stream(self._stream1)
+        if isinstance(self._stream1, _LoopbackCapture):
+            self._close_loopbacks_with_mute([self._stream1])
+        else:
+            self._safe_close_stream(self._stream1)
 
         # Unconditional cleanup
         self._stream1 = None
@@ -1054,9 +1116,17 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Stop mic first, then loopback
-        self._safe_close_stream(self._stream2)
-        self._safe_close_stream(self._stream1)
+        # Close non-loopback streams (mic) first
+        lb_streams = []
+        for s in [self._stream2, self._stream1]:
+            if isinstance(s, _LoopbackCapture):
+                lb_streams.append(s)
+            else:
+                self._safe_close_stream(s)
+
+        # Close loopback streams with mute to prevent WASAPI crash
+        if lb_streams:
+            self._close_loopbacks_with_mute(lb_streams)
 
         # Unconditional cleanup
         self._stream1 = None
