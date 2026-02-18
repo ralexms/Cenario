@@ -85,7 +85,7 @@ foreach ($sub in @("app", "models", "data")) {
 
 # ---- Copy app source ----
 Info "Copying application source..."
-foreach ($item in @("cenario.py")) {
+foreach ($item in @("cenario.py", "updater.py")) {
     $dest = Join-Path (Join-Path $InstallDir "app") $item
     Copy-Item (Join-Path $RepoDir $item) -Destination $dest -Force
 }

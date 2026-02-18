@@ -96,10 +96,12 @@ mkdir -p "$INSTALL_DIR"/{app,models,data}
 info "Copying application source..."
 # Remove old app source (but not user data)
 rm -rf "$INSTALL_DIR/app/cenario.py" \
+       "$INSTALL_DIR/app/updater.py" \
        "$INSTALL_DIR/app/core" \
        "$INSTALL_DIR/app/gui"
 
 cp "$REPO_DIR/cenario.py" "$INSTALL_DIR/app/"
+cp "$REPO_DIR/updater.py" "$INSTALL_DIR/app/"
 cp -r "$REPO_DIR/core" "$INSTALL_DIR/app/core"
 cp -r "$REPO_DIR/gui" "$INSTALL_DIR/app/gui"
 
