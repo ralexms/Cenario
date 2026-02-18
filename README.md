@@ -96,9 +96,3 @@ You can also run Cenario from the terminal.
 *   **CUDA Out of Memory**: If you encounter OOM errors during summarization, try selecting the **0.5B** model or closing other GPU-intensive applications. The application attempts to handle this gracefully by unloading models when not in use.
 *   **Audio Sources (Linux)**: If you don't see your monitor source, ensure you are using PulseAudio or PipeWire and that your recording device is set to "Monitor of..." in your system sound settings.
 *   **Audio Sources (Windows)**: System audio capture uses WASAPI loopback. If loopback recording fails, ensure your output device supports shared mode. The default output device is auto-selected.
-
-## Known Issues
-
-*   **Speaker Diarization Accuracy**: The diarization model does not provide reliable identification of speakers are requires additional time to process while not being really necessary. It has currently been disabled and will probably be removed in the future.
-*   **Online Meetings**: Currently it is recommended to use headphones when following an online meeting to prevent the microphone from picking up the system audio, which can cause echo and reduce transcription quality. An echo cancellation feature is planned for a future release.
-*   **Model Caching size**: When switching between several models, the program will require to download and cache the models, which will require around 20GB of free space. To prevent this use only the default recommended models.
