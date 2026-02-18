@@ -86,34 +86,71 @@ class _LoopbackCapture:
         target_rate = self._target_rate
         import time
 
+        # Initialize timing for silence insertion
+        start_time = time.time()
+        total_samples_out = 0
+        
+        # Threshold for silence insertion (e.g., 100ms)
+        # If we are behind by more than this, we insert silence.
+        # This handles the case where WASAPI loopback provides no data (silence).
+        silence_threshold = int(0.1 * target_rate)
+
         while not self._stop_event.is_set():
+            # 1. Read available data
             try:
-                # Poll to see if enough data is available.
-                if self._stream.get_read_available() < chunk:
-                    time.sleep(0.005)
-                    continue
-
-                data = self._stream.read(chunk, exception_on_overflow=False)
+                avail = self._stream.get_read_available()
             except Exception:
-                if self._stop_event.is_set():
-                    break
-                time.sleep(0.01)
-                continue
+                avail = 0
+            
+            # If data is available, read it
+            if avail > 0:
+                # Read up to a reasonable amount to avoid massive allocations if buffer got full
+                read_frames = min(avail, 4096)
+                try:
+                    data = self._stream.read(read_frames, exception_on_overflow=False)
+                    
+                    arr = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
+                    mono = _downmix_to_mono_int16(arr)
 
-            arr = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
-            mono = _downmix_to_mono_int16(arr)
-
-            if native_rate != target_rate and len(mono) > 0:
-                n_out = int(len(mono) * target_rate / native_rate)
-                if n_out > 0:
-                    mono = np.interp(
-                        np.linspace(0, len(mono) - 1, n_out),
-                        np.arange(len(mono)),
-                        mono.astype(np.float64),
-                    ).astype(np.int16)
-
-            with self._lock:
-                self._buffer_list.append(mono.tobytes())
+                    # Resample if needed
+                    if native_rate != target_rate and len(mono) > 0:
+                        n_out = int(len(mono) * target_rate / native_rate)
+                        if n_out > 0:
+                            mono = np.interp(
+                                np.linspace(0, len(mono) - 1, n_out),
+                                np.arange(len(mono)),
+                                mono.astype(np.float64),
+                            ).astype(np.int16)
+                    
+                    if len(mono) > 0:
+                        with self._lock:
+                            self._buffer_list.append(mono.tobytes())
+                        total_samples_out += len(mono)
+                        
+                except Exception:
+                    pass
+            
+            # 2. Check synchronization with wall clock
+            current_time = time.time()
+            elapsed = current_time - start_time
+            expected_samples = int(elapsed * target_rate)
+            
+            deficit = expected_samples - total_samples_out
+            
+            if deficit > silence_threshold:
+                # We are falling behind (likely due to silence in loopback).
+                # Insert silence to catch up.
+                # We fill up to the expected amount.
+                silence_samples = deficit
+                silence_bytes = b'\x00' * (silence_samples * 2)
+                
+                with self._lock:
+                    self._buffer_list.append(silence_bytes)
+                
+                total_samples_out += silence_samples
+            
+            # Sleep briefly to avoid busy loop
+            time.sleep(0.005)
 
 
 def _downmix_to_mono_int16(indata):
