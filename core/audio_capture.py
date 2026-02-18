@@ -274,6 +274,28 @@ class AudioCapture:
         else:
             stream.start()  # sounddevice
 
+    def _deactivate_loopback_streams(self):
+        """Signal loopback callbacks to stop and wait for streams to deactivate.
+
+        Must be called BEFORE _safe_close_stream so that PortAudio is not
+        tearing down a stream while its callback is still running.
+        """
+        import time
+        self._stopping = True
+        for stream in (self._stream1, self._stream2):
+            if stream is None:
+                continue
+            # Only pyaudio streams need deactivation (identified by stop_stream)
+            if not hasattr(stream, 'stop_stream'):
+                continue
+            for _ in range(20):  # up to 1 second
+                try:
+                    if not stream.is_active():
+                        break
+                except Exception:
+                    break
+                time.sleep(0.05)
+
     def _cleanup_pyaudio(self):
         """Terminate the PyAudio instance if no streams are active."""
         if self._pyaudio is not None and self._stream1 is None and self._stream2 is None:
@@ -660,10 +682,8 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Signal loopback callbacks to stop before closing streams
-        import time
-        self._stopping = True
-        time.sleep(0.1)
+        # Wait for loopback callbacks to finish before closing streams
+        self._deactivate_loopback_streams()
 
         self._safe_close_stream(self._stream1)
 
@@ -953,11 +973,9 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Signal loopback callbacks to stop before closing streams —
+        # Wait for loopback callbacks to finish before closing streams —
         # avoids PortAudio crash from closing a stream mid-callback.
-        import time
-        self._stopping = True
-        time.sleep(0.1)
+        self._deactivate_loopback_streams()
 
         self._safe_close_stream(self._stream1)
         self._safe_close_stream(self._stream2)

@@ -10,3 +10,5 @@
 [ ] Have previously selected source selection for Monitor and Microphone persist across sessions.
 [ ] Create updater script to check for new releases.
 [ ] Add conversation functionality to the UI to allow users to ask questions about the meeting
+[ ] Add milliseconds to transcription to avoid overlap of the speakers in stereo mode
+[ ] Add transcription mode option: transcribe each channel separately (stereo) or transcribe both channels together (mono)
