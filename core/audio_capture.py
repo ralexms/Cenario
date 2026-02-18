@@ -59,11 +59,11 @@ class _LoopbackCapture:
         if not self.active:
             return
         self._stop_event.set()
-        # stop_stream unblocks any pending read() call
-        try:
-            self._stream.stop_stream()
-        except Exception:
-            pass
+        # Note: We do NOT call stop_stream() here because it can cause a native
+        # crash if called while the reader thread is actively reading.
+        # Instead, we rely on the reader thread polling get_read_available()
+        # and exiting the loop when it sees _stop_event set.
+        
         if self._thread:
             self._thread.join(timeout=2)
             self._thread = None
@@ -81,14 +81,21 @@ class _LoopbackCapture:
         channels = self._channels
         native_rate = self._native_rate
         target_rate = self._target_rate
+        import time
 
         while not self._stop_event.is_set():
             try:
+                # Poll to see if enough data is available.
+                # This avoids blocking in read() which can cause crashes if
+                # the stream is stopped/closed from another thread.
+                if self._stream.get_read_available() < chunk:
+                    time.sleep(0.005)
+                    continue
+
                 data = self._stream.read(chunk, exception_on_overflow=False)
             except Exception:
                 if self._stop_event.is_set():
                     break
-                import time
                 time.sleep(0.01)
                 continue
 
