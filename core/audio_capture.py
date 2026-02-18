@@ -39,6 +39,7 @@ class AudioCapture:
         self._stream1 = None
         self._stream2 = None
         self._pyaudio = None  # pyaudiowpatch instance (loopback only)
+        self._stopping = False  # signal loopback callbacks to stop
 
     # ------------------------------------------------------------------ #
     #  Source listing                                                      #
@@ -210,12 +211,26 @@ class AudioCapture:
             self._pyaudio = pyaudio.PyAudio()
         dev = self._pyaudio.get_device_info_by_index(device_idx)
         channels = dev['maxInputChannels']
-        rate = int(dev['defaultSampleRate'])
+        native_rate = int(dev['defaultSampleRate'])
+        target_rate = self.sample_rate
 
         def callback(in_data, frame_count, time_info, status):
+            if self._stopping:
+                return (None, pyaudio.paComplete)
             # in_data is raw bytes — multi-channel int16
             arr = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
             mono = AudioCapture._downmix_to_mono_int16(arr)
+            # Resample from device native rate to target rate
+            if native_rate != target_rate and len(mono) > 0:
+                n_out = int(len(mono) * target_rate / native_rate)
+                if n_out > 0:
+                    mono = np.interp(
+                        np.linspace(0, len(mono) - 1, n_out),
+                        np.arange(len(mono)),
+                        mono.astype(np.float64),
+                    ).astype(np.int16)
+                else:
+                    return (None, pyaudio.paContinue)
             with lock:
                 buffer_list.append(mono.tobytes())
             return (None, pyaudio.paContinue)
@@ -223,7 +238,7 @@ class AudioCapture:
         stream = self._pyaudio.open(
             format=pyaudio.paInt16,
             channels=channels,
-            rate=rate,
+            rate=native_rate,
             input=True,
             input_device_index=device_idx,
             stream_callback=callback,
@@ -645,7 +660,11 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Stop/close stream — errors here must not prevent cleanup
+        # Signal loopback callbacks to stop before closing streams
+        import time
+        self._stopping = True
+        time.sleep(0.1)
+
         self._safe_close_stream(self._stream1)
 
         # Unconditional cleanup
@@ -654,6 +673,7 @@ class AudioCapture:
         self.recording_process = None
         self._recording_mode = None
         self._buffer1 = []
+        self._stopping = False
         self._cleanup_pyaudio()
 
         return saved
@@ -906,6 +926,13 @@ class AudioCapture:
             channel1 = np.frombuffer(audio_data1, dtype=np.int16)
             channel2 = np.frombuffer(audio_data2, dtype=np.int16)
 
+            # Pad missing channel with silence (WASAPI loopback produces
+            # no data when nothing is playing through speakers).
+            if len(channel1) == 0 and len(channel2) > 0:
+                channel1 = np.zeros(len(channel2), dtype=np.int16)
+            elif len(channel2) == 0 and len(channel1) > 0:
+                channel2 = np.zeros(len(channel1), dtype=np.int16)
+
             min_len = min(len(channel1), len(channel2))
             channel1 = channel1[:min_len]
             channel2 = channel2[:min_len]
@@ -926,7 +953,12 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        # Stop/close streams — errors here must not prevent cleanup
+        # Signal loopback callbacks to stop before closing streams —
+        # avoids PortAudio crash from closing a stream mid-callback.
+        import time
+        self._stopping = True
+        time.sleep(0.1)
+
         self._safe_close_stream(self._stream1)
         self._safe_close_stream(self._stream2)
 
@@ -937,6 +969,7 @@ class AudioCapture:
         self._recording_mode = None
         self._buffer1 = []
         self._buffer2 = []
+        self._stopping = False
         self._cleanup_pyaudio()
 
         return saved
