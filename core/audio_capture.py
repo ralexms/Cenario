@@ -61,20 +61,15 @@ class _LoopbackCapture:
         self._stop_event.set()
         
         # Wait for the reader thread to exit.
-        # The reader thread polls get_read_available() so it should exit quickly
-        # without blocking in read().
         if self._thread:
             self._thread.join(timeout=2)
             self._thread = None
             
-        # Now that the reader thread has exited, it is safe to stop the stream.
-        # This avoids closing a running stream (which can crash) and avoids
-        # stopping a stream while read() is active (which can also crash).
-        try:
-            self._stream.stop_stream()
-        except Exception:
-            pass
-
+        # We do NOT call self._stream.stop_stream() here.
+        # Calling stop_stream() on a WASAPI loopback stream that might still
+        # have pending data or be in a delicate state can cause crashes.
+        # We rely on close() to implicitly stop the stream.
+            
         self.active = False
 
     def close(self):
@@ -94,8 +89,6 @@ class _LoopbackCapture:
         while not self._stop_event.is_set():
             try:
                 # Poll to see if enough data is available.
-                # This avoids blocking in read() which can cause crashes if
-                # the stream is stopped/closed from another thread.
                 if self._stream.get_read_available() < chunk:
                     time.sleep(0.005)
                     continue
@@ -243,9 +236,17 @@ class AudioCapture:
                 continue
             name = dev['name']
             state = 'RUNNING' if name == default_output_name else 'IDLE'
+            
+            # Clean up description
+            desc = name
+            if '[Loopback]' in desc:
+                desc = desc.replace('[Loopback]', '').strip()
+            if not desc.endswith('(Loopback)'):
+                desc = f"{desc} (Loopback)"
+                
             sources.append({
                 'name': f"loopback_{i}",
-                'description': f"{name} (Loopback)",
+                'description': desc,
                 'state': state,
                 'index': i,
                 'default_samplerate': dev['defaultSampleRate'],
@@ -515,8 +516,9 @@ class AudioCapture:
             import time
             time.sleep(duration)
 
-            self._safe_close_stream(stream1)
+            # Stop mic first, then loopback
             self._safe_close_stream(stream2)
+            self._safe_close_stream(stream1)
             self._cleanup_pyaudio()
 
             with lock1:
@@ -1015,8 +1017,9 @@ class AudioCapture:
         except Exception as e:
             print(f"Error saving recording: {e}")
 
-        self._safe_close_stream(self._stream1)
+        # Stop mic first, then loopback
         self._safe_close_stream(self._stream2)
+        self._safe_close_stream(self._stream1)
 
         # Unconditional cleanup
         self._stream1 = None
