@@ -4,6 +4,7 @@
 import os
 import sys
 import json
+import subprocess
 import urllib.request
 import shutil
 import zipfile
@@ -71,6 +72,19 @@ def download_and_extract(url):
                     shutil.copytree(s, d)
                 else:
                     shutil.copy2(s, d)
+
+            # Install any new/updated pip dependencies
+            req_file = os.path.join(source_dir, 'installer', 'requirements-pip.txt')
+            if os.path.exists(req_file):
+                print("Installing/updating dependencies...")
+                try:
+                    subprocess.run(
+                        [sys.executable, '-m', 'pip', 'install', '-r', req_file, '--quiet'],
+                        check=True,
+                    )
+                    print("Dependencies updated.")
+                except Exception as e:
+                    print(f"Warning: dependency installation failed: {e}")
 
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
