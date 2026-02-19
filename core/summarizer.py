@@ -3,6 +3,7 @@ from transformers import pipeline, TextIteratorStreamer, BitsAndBytesConfig
 import gc
 import os
 import threading
+import math
 
 class Summarizer:
     """Handles summarization and action point extraction using a local LLM."""
@@ -276,7 +277,7 @@ class Summarizer:
 
     # ---- Chunked summarization (map-reduce) ----
 
-    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None):
+    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, num_chunks=None):
         """Map-reduce chunked summarization for long transcripts."""
         self.load_model()
 
@@ -288,7 +289,16 @@ class Summarizer:
         # (the "Here is the meeting transcript..." wrapper is ~50 tokens)
         chunk_content_budget = context_budget - 60
 
-        chunks = self._split_text_into_chunks(text, chunk_content_budget)
+        if num_chunks is not None:
+             # If num_chunks is specified, we try to split the text into that many chunks
+             # We calculate the approximate tokens per chunk
+             tokens_per_chunk = math.ceil(input_tokens / num_chunks)
+             # We use the smaller of the calculated size or the budget
+             chunk_size = min(tokens_per_chunk, chunk_content_budget)
+             chunks = self._split_text_into_chunks(text, chunk_size)
+        else:
+             chunks = self._split_text_into_chunks(text, chunk_content_budget)
+             
         num_chunks = len(chunks)
 
         if stream_callback:
@@ -409,7 +419,7 @@ class Summarizer:
 
     # ---- Main entry point ----
 
-    def summarize(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, chunking="auto"):
+    def summarize(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, chunking="auto", num_chunks=None):
         """
         Summarize the text.
 
@@ -419,6 +429,7 @@ class Summarizer:
             max_new_tokens: Max tokens to generate.
             stream_callback: Optional function(text_chunk) for real-time updates.
             chunking: "auto" (chunk if input exceeds safe threshold) or "always" (force chunking).
+            num_chunks: Optional number of chunks to split the text into (if chunking is "always").
         """
         thread = None
         try:
@@ -440,7 +451,7 @@ class Summarizer:
             print(f"Summarize: {input_tokens} tokens, budget: {context_budget}, chunking: {chunking}, needs_chunking: {needs_chunking}")
 
             if needs_chunking:
-                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback)
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, num_chunks=num_chunks if chunking == "always" else None)
 
             # Single-pass summarization
             system_prompt = self._get_system_prompt()

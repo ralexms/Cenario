@@ -484,12 +484,16 @@
             <div>
                 <label for="summaryChunking">Long Text</label>
                 <div class="tooltip" style="width:100%">
-                    <select id="summaryChunking">
+                    <select id="summaryChunking" onchange="toggleSummaryChunks()">
                         <option value="auto" selected>Auto (chunk if needed)</option>
                         <option value="always">Always chunk</option>
                     </select>
                     <span class="tooltiptext">Auto: chunks only when input exceeds safe token limit<br>Always: forces map-reduce chunking</span>
                 </div>
+            </div>
+            <div id="summaryNumChunksGroup" class="hidden">
+                <label for="summaryNumChunks">Number of Chunks</label>
+                <input type="number" id="summaryNumChunks" value="2" min="2" max="50">
             </div>
             <div style="display:flex;align-items:end;padding-bottom:10px;">
                 <button id="btnSummarize" class="btn-action" onclick="startSummarization()">Summarize</button>
@@ -540,6 +544,11 @@
     function toggleChunked() {
         const show = document.getElementById('chkChunked').checked;
         document.getElementById('chunkMinutesGroup').classList.toggle('hidden', !show);
+    }
+
+    function toggleSummaryChunks() {
+        const mode = document.getElementById('summaryChunking').value;
+        document.getElementById('summaryNumChunksGroup').classList.toggle('hidden', mode !== 'always');
     }
 
     function fmtTime(sec) {
@@ -1187,6 +1196,7 @@
         const detailLevel = document.getElementById('summaryDetail').value;
         const quantization = document.getElementById('summaryQuant').value;
         const chunking = document.getElementById('summaryChunking').value;
+        const numChunks = parseInt(document.getElementById('summaryNumChunks').value) || 2;
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -1203,7 +1213,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking })
+                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks })
             });
             const data = await resp.json();
 
@@ -1345,7 +1355,8 @@
         'summaryModel',
         'summaryDetail',
         'summaryQuant',
-        'summaryChunking'
+        'summaryChunking',
+        'summaryNumChunks'
     ];
 
     function initPersistence() {
@@ -1380,6 +1391,7 @@
 
         // Restore dependent visibility
         toggleChunked();
+        toggleSummaryChunks();
     }
 
     // ---- Init ----
