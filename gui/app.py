@@ -388,6 +388,7 @@ def api_postprocess_start():
     beam_size = body.get('beam_size', 5)
     vad_filter = body.get('vad_filter', False)
     stereo_mode = body.get('stereo_mode', 'joint') # Default to joint
+    chunk_minutes = body.get('chunk_minutes', 0)
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -439,6 +440,8 @@ def api_postprocess_start():
                 elif evt_type == 'status':
                     _post['status'] = event.get('status', _post['status'])
                     _emit(event)
+                elif evt_type == 'chunk_progress':
+                    _emit(event)
                 elif evt_type == 'diarize_progress':
                     _emit(event)
                 elif evt_type == 'warning':
@@ -454,21 +457,30 @@ def api_postprocess_start():
                     hf_token=hf_token if diarize else None,
                     language=language, on_progress=on_progress,
                     beam_size=beam_size, vad_filter=vad_filter,
-                    stereo_mode=stereo_mode)
+                    stereo_mode=stereo_mode,
+                    chunk_minutes=chunk_minutes)
             else:
                 if diarize and hf_token:
                     result = transcriber.transcribe_with_diarization(
                         file_path, model_size=model_size, hf_token=hf_token,
                         language=language, on_progress=on_progress,
-                        beam_size=beam_size, vad_filter=vad_filter)
+                        beam_size=beam_size, vad_filter=vad_filter,
+                        chunk_minutes=chunk_minutes)
                 else:
                     def seg_cb(seg):
                         on_progress({'type': 'segment', **seg})
 
-                    result = transcriber.transcribe(
-                        file_path, model_size=model_size, language=language,
-                        on_segment=seg_cb, beam_size=beam_size,
-                        vad_filter=vad_filter)
+                    if chunk_minutes > 0:
+                        result = transcriber.transcribe_chunked(
+                            file_path, model_size=model_size, language=language,
+                            on_segment=seg_cb, beam_size=beam_size,
+                            vad_filter=vad_filter, chunk_minutes=chunk_minutes,
+                            on_progress=on_progress)
+                    else:
+                        result = transcriber.transcribe(
+                            file_path, model_size=model_size, language=language,
+                            on_segment=seg_cb, beam_size=beam_size,
+                            vad_filter=vad_filter)
                     on_progress({'type': 'transcription_done', 'result': result})
 
             _post['result'] = result

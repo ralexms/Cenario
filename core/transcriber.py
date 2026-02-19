@@ -6,6 +6,92 @@ import numpy as np
 import tempfile
 import os
 import time
+import difflib
+
+
+def _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds=10):
+    """Split a WAV file into overlapping chunks as temp WAV files.
+
+    Returns list of (file_path, chunk_start_sec, chunk_end_sec) tuples.
+    If the file is shorter than one chunk, returns [(audio_file, 0.0, duration)]
+    with no temp files created.
+    """
+    with wave.open(audio_file, 'rb') as wf:
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        n_frames = wf.getnframes()
+        all_frames = wf.readframes(n_frames)
+
+    duration = n_frames / framerate
+    chunk_sec = chunk_minutes * 60
+
+    if duration <= chunk_sec:
+        return [(audio_file, 0.0, duration)]
+
+    chunks = []
+    pos = 0.0
+    while pos < duration:
+        end = min(pos + chunk_sec, duration)
+        start_frame = int(pos * framerate)
+        end_frame = int(end * framerate)
+        bytes_per_frame = n_channels * sampwidth
+        chunk_bytes = all_frames[start_frame * bytes_per_frame:end_frame * bytes_per_frame]
+
+        tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        with wave.open(tmp_path, 'wb') as wf:
+            wf.setnchannels(n_channels)
+            wf.setsampwidth(sampwidth)
+            wf.setframerate(framerate)
+            wf.writeframes(chunk_bytes)
+
+        chunks.append((tmp_path, pos, end))
+
+        # Next chunk starts overlap_seconds before where this one ended
+        next_pos = end - overlap_seconds
+        if next_pos <= pos:
+            break
+        pos = next_pos
+
+    return chunks
+
+
+def _deduplicate_overlap(prev_segments, new_segments, overlap_start, overlap_end):
+    """Filter new_segments to remove duplicates that fall in the overlap zone.
+
+    Two-pass check: timestamp proximity (midpoints within 2s) then text
+    similarity (SequenceMatcher ratio > 0.8). Segments starting after
+    overlap_end are always kept.
+    """
+    if not prev_segments or not new_segments:
+        return new_segments
+
+    kept = []
+    for seg in new_segments:
+        mid = (seg['start'] + seg['end']) / 2
+        # Segments clearly past the overlap zone — always keep
+        if mid > overlap_end:
+            kept.append(seg)
+            continue
+
+        # Check against previous segments for duplicates
+        is_dup = False
+        for prev in prev_segments:
+            prev_mid = (prev['start'] + prev['end']) / 2
+            if abs(mid - prev_mid) < 2.0:
+                ratio = difflib.SequenceMatcher(
+                    None, prev['text'].strip(), seg['text'].strip()
+                ).ratio()
+                if ratio > 0.8:
+                    is_dup = True
+                    break
+
+        if not is_dup:
+            kept.append(seg)
+
+    return kept
 
 
 class Transcriber:
@@ -95,6 +181,105 @@ class Transcriber:
 
         return result
 
+    def transcribe_chunked(self, audio_file, model_size="small", language=None,
+                           on_segment=None, beam_size=5, vad_filter=False,
+                           chunk_minutes=10, overlap_seconds=10,
+                           on_progress=None):
+        """Transcribe a long audio file in chunks to avoid OOM.
+
+        Splits audio into overlapping segments, transcribes each independently
+        (with model reload between chunks to reset CTranslate2 memory pool),
+        and merges results with deduplication.
+        """
+        chunks = _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds)
+
+        # Short file — fall through to regular transcribe
+        if len(chunks) == 1 and chunks[0][0] == audio_file:
+            return self.transcribe(audio_file, model_size, language=language,
+                                   on_segment=on_segment, beam_size=beam_size,
+                                   vad_filter=vad_filter)
+
+        total_chunks = len(chunks)
+        all_segments = []
+        detected_language = language  # pin after chunk 0
+        temp_files = [c[0] for c in chunks]
+
+        try:
+            for idx, (chunk_file, chunk_start, chunk_end) in enumerate(chunks):
+                print(f"Transcribing chunk {idx + 1}/{total_chunks} "
+                      f"({chunk_start:.0f}s - {chunk_end:.0f}s)...")
+
+                if on_progress:
+                    start_m = int(chunk_start) // 60
+                    start_s = int(chunk_start) % 60
+                    end_m = int(chunk_end) // 60
+                    end_s = int(chunk_end) % 60
+                    on_progress({
+                        'type': 'chunk_progress',
+                        'chunk': idx + 1,
+                        'total': total_chunks,
+                        'start': chunk_start,
+                        'end': chunk_end,
+                        'label': (f"Transcribing chunk {idx + 1}/{total_chunks} "
+                                  f"({start_m:02d}:{start_s:02d} - {end_m:02d}:{end_s:02d})")
+                    })
+
+                # Unload model between chunks to reset CTranslate2 memory pool
+                if idx > 0:
+                    self.unload_model()
+
+                # Collect segments for this chunk with adjusted timestamps
+                chunk_segments = []
+
+                def _chunk_cb(seg, _offset=chunk_start):
+                    adjusted = {
+                        'start': seg['start'] + _offset,
+                        'end': seg['end'] + _offset,
+                        'text': seg['text']
+                    }
+                    chunk_segments.append(adjusted)
+
+                result = self.transcribe(chunk_file, model_size,
+                                         language=detected_language,
+                                         on_segment=_chunk_cb,
+                                         beam_size=beam_size,
+                                         vad_filter=vad_filter)
+
+                # Pin language from first chunk
+                if idx == 0:
+                    detected_language = result.get('language', detected_language)
+
+                if idx == 0:
+                    # First chunk — emit all segments immediately
+                    for seg in chunk_segments:
+                        all_segments.append(seg)
+                        if on_segment:
+                            on_segment(seg)
+                else:
+                    # Overlap zone: from chunk_start to chunk_start + overlap_seconds
+                    overlap_end = chunk_start + overlap_seconds
+                    survived = _deduplicate_overlap(
+                        all_segments, chunk_segments, chunk_start, overlap_end
+                    )
+                    for seg in survived:
+                        all_segments.append(seg)
+                        if on_segment:
+                            on_segment(seg)
+
+        finally:
+            # Clean up temp files (skip original audio_file)
+            for f in temp_files:
+                if f != audio_file:
+                    try:
+                        os.unlink(f)
+                    except OSError:
+                        pass
+
+        return {
+            'language': detected_language or '',
+            'segments': all_segments
+        }
+
     def _diarize(self, audio_file, hf_token=None, speaker_prefix="",
                  on_progress=None):
         """Run diarization on an audio file and return the result.
@@ -158,7 +343,8 @@ class Transcriber:
 
     def transcribe_stereo(self, audio_file, model_size="small", hf_token=None,
                           language=None, on_progress=None,
-                          beam_size=5, vad_filter=False, stereo_mode="joint"):
+                          beam_size=5, vad_filter=False, stereo_mode="joint",
+                          chunk_minutes=0):
         """
         Transcribe stereo file by splitting channels, with optional diarization.
 
@@ -180,7 +366,8 @@ class Transcriber:
                 return self.transcribe_with_diarization(
                     audio_file, model_size=model_size, hf_token=hf_token,
                     language=language, on_progress=on_progress,
-                    beam_size=beam_size, vad_filter=vad_filter
+                    beam_size=beam_size, vad_filter=vad_filter,
+                    chunk_minutes=chunk_minutes
                 )
             else:
                 if on_progress:
@@ -191,9 +378,19 @@ class Transcriber:
                         on_progress({'type': 'segment', **seg})
 
                 print("Transcribing stereo file (joint)...")
-                result = self.transcribe(audio_file, model_size, language=language,
-                                         on_segment=seg_cb, beam_size=beam_size,
-                                         vad_filter=vad_filter)
+                if chunk_minutes > 0:
+                    def _progress_cb(evt):
+                        if on_progress:
+                            on_progress(evt)
+                    result = self.transcribe_chunked(
+                        audio_file, model_size, language=language,
+                        on_segment=seg_cb, beam_size=beam_size,
+                        vad_filter=vad_filter, chunk_minutes=chunk_minutes,
+                        on_progress=_progress_cb)
+                else:
+                    result = self.transcribe(audio_file, model_size, language=language,
+                                             on_segment=seg_cb, beam_size=beam_size,
+                                             vad_filter=vad_filter)
                 
                 if on_progress:
                     on_progress({'type': 'transcription_done', 'result': result})
@@ -235,9 +432,16 @@ class Transcriber:
                 on_progress({'type': 'segment', 'channel': 'left', **seg})
 
         print("Transcribing left channel (meeting audio)...")
-        result_left = self.transcribe(temp_left, model_size, language=language,
-                                      on_segment=left_cb, beam_size=beam_size,
-                                      vad_filter=vad_filter)
+        if chunk_minutes > 0:
+            result_left = self.transcribe_chunked(
+                temp_left, model_size, language=language,
+                on_segment=left_cb, beam_size=beam_size,
+                vad_filter=vad_filter, chunk_minutes=chunk_minutes,
+                on_progress=on_progress)
+        else:
+            result_left = self.transcribe(temp_left, model_size, language=language,
+                                          on_segment=left_cb, beam_size=beam_size,
+                                          vad_filter=vad_filter)
 
         if on_progress:
             on_progress({'type': 'status', 'status': 'transcribing',
@@ -248,9 +452,16 @@ class Transcriber:
                 on_progress({'type': 'segment', 'channel': 'right', **seg})
 
         print("Transcribing right channel (your microphone)...")
-        result_right = self.transcribe(temp_right, model_size, language=language,
-                                       on_segment=right_cb, beam_size=beam_size,
-                                       vad_filter=vad_filter)
+        if chunk_minutes > 0:
+            result_right = self.transcribe_chunked(
+                temp_right, model_size, language=language,
+                on_segment=right_cb, beam_size=beam_size,
+                vad_filter=vad_filter, chunk_minutes=chunk_minutes,
+                on_progress=on_progress)
+        else:
+            result_right = self.transcribe(temp_right, model_size, language=language,
+                                           on_segment=right_cb, beam_size=beam_size,
+                                           vad_filter=vad_filter)
 
         result = {'left_channel': result_left, 'right_channel': result_right}
 
@@ -352,7 +563,7 @@ class Transcriber:
     def transcribe_with_diarization(self, audio_file, model_size="small",
                                      hf_token=None, language=None,
                                      on_progress=None, beam_size=5,
-                                     vad_filter=False):
+                                     vad_filter=False, chunk_minutes=0):
         """
         Transcribe with speaker diarization.
 
@@ -364,6 +575,7 @@ class Transcriber:
             on_progress: Callback for progress events
             beam_size: Beam size for decoding (higher = better but slower)
             vad_filter: Enable voice activity detection filtering
+            chunk_minutes: When > 0, use chunked transcription
 
         Returns:
             dict with transcription + speaker labels
@@ -376,9 +588,16 @@ class Transcriber:
                 on_progress({'type': 'segment', **seg})
 
         print("Transcribing...")
-        transcription = self.transcribe(audio_file, model_size, language=language,
-                                        on_segment=seg_cb, beam_size=beam_size,
-                                        vad_filter=vad_filter)
+        if chunk_minutes > 0:
+            transcription = self.transcribe_chunked(
+                audio_file, model_size, language=language,
+                on_segment=seg_cb, beam_size=beam_size,
+                vad_filter=vad_filter, chunk_minutes=chunk_minutes,
+                on_progress=on_progress)
+        else:
+            transcription = self.transcribe(audio_file, model_size, language=language,
+                                            on_segment=seg_cb, beam_size=beam_size,
+                                            vad_filter=vad_filter)
 
         # Signal transcription complete before diarization
         if on_progress:

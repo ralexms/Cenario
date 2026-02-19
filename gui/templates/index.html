@@ -372,6 +372,15 @@
                 <label style="margin:0;"><input type="checkbox" id="chkVadFilter"> VAD Filter</label>
             </div>
         </div>
+        <div class="row" style="margin-bottom:12px;">
+            <div style="display:flex;gap:16px;align-items:end;padding-bottom:10px;">
+                <label style="margin:0;"><input type="checkbox" id="chkChunked" onchange="toggleChunked()"> Chunked Transcription</label>
+            </div>
+            <div id="chunkMinutesGroup" class="hidden">
+                <label for="chunkMinutes">Chunk Size (minutes)</label>
+                <input type="number" id="chunkMinutes" value="10" min="2" max="60">
+            </div>
+        </div>
         <div class="row hidden" style="margin-bottom:12px;">
             <div style="display:flex;gap:16px;align-items:end;padding-bottom:10px;">
                 <label style="margin:0;color:#777;cursor:not-allowed;"><input type="checkbox" id="chkDiarize" disabled> Diarization (Disabled)</label>
@@ -515,6 +524,11 @@
 
     function toggleMode() {
         document.getElementById('monitorGroup').classList.toggle('hidden', getMode() === 'mono');
+    }
+
+    function toggleChunked() {
+        const show = document.getElementById('chkChunked').checked;
+        document.getElementById('chunkMinutesGroup').classList.toggle('hidden', !show);
     }
 
     function fmtTime(sec) {
@@ -862,7 +876,9 @@
                     compute_type: computeType,
                     beam_size: parseInt(document.getElementById('beamSize').value) || 5,
                     vad_filter: document.getElementById('chkVadFilter').checked,
-                    stereo_mode: stereoMode
+                    stereo_mode: stereoMode,
+                    chunk_minutes: document.getElementById('chkChunked').checked
+                        ? (parseInt(document.getElementById('chunkMinutes').value) || 10) : 0
                 })
             });
             const data = await resp.json();
@@ -915,6 +931,8 @@
                 const pct = Math.min(100, (data.end / postDuration) * 100);
                 progressBar.style.width = pct + '%';
             }
+        } else if (data.type === 'chunk_progress') {
+            statusText.textContent = data.label || ('Transcribing chunk ' + data.chunk + '/' + data.total);
         } else if (data.type === 'diarize_progress') {
             if (data.total > 0) {
                 const pct = Math.min(100, (data.completed / data.total) * 100);
@@ -1311,6 +1329,7 @@
         'postModel',
         'postComputeType',
         'beamSize',
+        'chunkMinutes',
         'summaryModel',
         'summaryDetail',
         'summaryQuant'
@@ -1332,6 +1351,22 @@
                 localStorage.setItem('cenario_' + id, el.value);
             });
         });
+
+        // Checkbox persistence (uses .checked instead of .value)
+        ['chkChunked', 'chkVadFilter'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const saved = localStorage.getItem('cenario_' + id);
+            if (saved !== null) {
+                el.checked = saved === 'true';
+            }
+            el.addEventListener('change', () => {
+                localStorage.setItem('cenario_' + id, el.checked);
+            });
+        });
+
+        // Restore dependent visibility
+        toggleChunked();
     }
 
     // ---- Init ----
