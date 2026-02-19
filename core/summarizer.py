@@ -20,6 +20,9 @@ class Summarizer:
         print(f"Loading summarization model: {self.model_id}...")
         try:
             # Set PYTORCH_CUDA_ALLOC_CONF to avoid fragmentation
+            # Note: This must be set before PyTorch is initialized to be effective.
+            # It is now set in gui/app.py, but keeping it here as a fallback/reminder doesn't hurt,
+            # though it likely won't take effect if torch is already loaded.
             if self.device == "cuda":
                 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 

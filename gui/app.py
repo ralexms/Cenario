@@ -2,6 +2,9 @@
 # gui/app.py — Flask web interface for Cenario
 
 import os
+# Set PyTorch memory allocation configuration to avoid fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import sys
 import json
 import wave
