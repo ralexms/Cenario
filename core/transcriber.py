@@ -7,6 +7,61 @@ import tempfile
 import os
 import time
 import difflib
+import re
+import shutil
+
+
+# Directory for caching CTranslate2-converted models
+_CT2_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "cenario", "ct2-models")
+
+
+def _ensure_ct2_model(model_id):
+    """If model_id is a HuggingFace repo that isn't in CTranslate2 format, convert it.
+
+    Standard faster-whisper model names (tiny, base, etc.) are returned as-is.
+    HuggingFace repo IDs (containing '/') are checked for a cached CTranslate2
+    conversion.  If none exists, the model is downloaded and converted using
+    ctranslate2's TransformersConverter.
+
+    Returns the model_size_or_path string to pass to WhisperModel().
+    """
+    # Standard model names — handled natively by faster-whisper
+    if "/" not in model_id:
+        return model_id
+
+    # Build a stable cache path from the repo id
+    safe_name = model_id.replace("/", "--")
+    ct2_dir = os.path.join(_CT2_CACHE_DIR, safe_name)
+    model_bin = os.path.join(ct2_dir, "model.bin")
+
+    # Already converted?
+    if os.path.isfile(model_bin) and os.path.getsize(model_bin) > 0:
+        print(f"Using cached CTranslate2 model: {ct2_dir}")
+        return ct2_dir
+
+    # Clean up partial/failed conversion
+    if os.path.exists(ct2_dir):
+        print(f"Cleaning up incomplete cache: {ct2_dir}")
+        shutil.rmtree(ct2_dir)
+
+    # Convert from HuggingFace transformers format
+    print(f"Converting '{model_id}' to CTranslate2 format (first-time only)...")
+    from ctranslate2.converters import TransformersConverter
+
+    class _CompatConverter(TransformersConverter):
+        """Work around dtype/torch_dtype mismatch between ctranslate2 and transformers."""
+        def load_model(self, model_class, model_name_or_path, **kwargs):
+            if "dtype" in kwargs:
+                kwargs["torch_dtype"] = kwargs.pop("dtype")
+            return model_class.from_pretrained(model_name_or_path, **kwargs)
+
+    os.makedirs(ct2_dir, exist_ok=True)
+    converter = _CompatConverter(model_id, copy_files=[
+        "tokenizer.json", "preprocessor_config.json",
+    ])
+    converter.convert(ct2_dir, quantization="float16", force=True)
+    print(f"Conversion complete — saved to {ct2_dir}")
+    return ct2_dir
 
 
 def _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds=10):
@@ -116,6 +171,9 @@ class Transcriber:
         if self.model is not None:
             self.unload_model()
 
+        # Convert HuggingFace models to CTranslate2 format if needed
+        model_path = _ensure_ct2_model(model_size)
+
         # Try loading with fallback: chosen compute -> cuda/int8 -> cpu/int8
         attempts = [(self.device, self.compute_type)]
         if self.device == "cuda" and self.compute_type != "int8":
@@ -127,7 +185,7 @@ class Transcriber:
             try:
                 print(f"Loading Whisper model: {model_size} (device={device}, compute={compute_type})...")
                 self.model = WhisperModel(
-                    model_size,
+                    model_path,
                     device=device,
                     compute_type=compute_type
                 )
