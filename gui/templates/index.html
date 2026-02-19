@@ -351,6 +351,17 @@
                     <option value="large-v3">large-v3</option>
                 </select>
             </div>
+            <div>
+                <label for="postComputeType">Compute Type</label>
+                <div class="tooltip" style="width:100%">
+                    <select id="postComputeType">
+                        <option value="float16" selected>float16 (Default)</option>
+                        <option value="int8_float16">int8_float16 (Less VRAM)</option>
+                        <option value="int8">int8 (Least VRAM)</option>
+                    </select>
+                    <span class="tooltiptext">float16: Best quality, most VRAM<br>int8_float16: Near-lossless, ~half VRAM<br>int8: Minimal quality loss, least VRAM</span>
+                </div>
+            </div>
              <div>
                 <label for="beamSize">Beam Size</label>
                 <input type="number" id="beamSize" value="5" min="1" max="20">
@@ -821,6 +832,7 @@
         }
 
         const model = document.getElementById('postModel').value;
+        const computeType = document.getElementById('postComputeType').value;
         const diarize = document.getElementById('chkDiarize').checked;
         const language = document.getElementById('language').value;
         const stereoMode = document.getElementById('stereoMode').value;
@@ -842,6 +854,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     file, model, diarize, language,
+                    compute_type: computeType,
                     beam_size: parseInt(document.getElementById('beamSize').value) || 5,
                     vad_filter: document.getElementById('chkVadFilter').checked,
                     stereo_mode: stereoMode

@@ -30,9 +30,9 @@ class Transcriber:
         if self.model is not None:
             self.unload_model()
 
-        # Try loading with fallback: cuda/float16 -> cuda/int8 -> cpu/int8
+        # Try loading with fallback: chosen compute -> cuda/int8 -> cpu/int8
         attempts = [(self.device, self.compute_type)]
-        if self.device == "cuda" and self.compute_type == "float16":
+        if self.device == "cuda" and self.compute_type != "int8":
             attempts.append(("cuda", "int8"))
         if self.device == "cuda":
             attempts.append(("cpu", "int8"))

@@ -382,6 +382,7 @@ def api_postprocess_start():
     body = request.get_json(force=True)
     file_path = body.get('file')
     model_size = body.get('model', 'medium') # Default changed to medium
+    compute_type = body.get('compute_type') or None  # None = auto (float16 on CUDA)
     diarize = body.get('diarize', True)
     language = body.get('language') or None
     beam_size = body.get('beam_size', 5)
@@ -412,7 +413,7 @@ def api_postprocess_start():
 
     def run():
         try:
-            transcriber = Transcriber()
+            transcriber = Transcriber(compute_type=compute_type)
 
             def on_progress(event):
                 evt_type = event.get('type')
