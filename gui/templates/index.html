@@ -314,6 +314,16 @@
             <span id="statusBadge" class="status idle">Idle</span>
         </div>
         <div id="livePreview" class="output-area"></div>
+
+        <div style="margin-top: 10px;">
+            <div class="checkbox-group">
+                <label><input type="checkbox" value="txt" class="liveExportFmt" checked> TXT</label>
+                <label><input type="checkbox" value="json" class="liveExportFmt" checked> JSON</label>
+                <label><input type="checkbox" value="srt" class="liveExportFmt" checked> SRT</label>
+            </div>
+            <button id="btnLiveExport" class="btn-action" onclick="exportLiveFiles()">Export Live Transcript</button>
+            <div id="liveExportLinks" style="margin-top:10px;"></div>
+        </div>
     </div>
 </div>
 
@@ -765,6 +775,39 @@
 
         } catch (e) {
             alert('Error: ' + e.message);
+        }
+    }
+
+    async function exportLiveFiles() {
+        const checkboxes = document.querySelectorAll('.liveExportFmt:checked');
+        const formats = Array.from(checkboxes).map(cb => cb.value);
+
+        if (!formats.length) {
+            alert('Select at least one export format');
+            return;
+        }
+
+        const linksDiv = document.getElementById('liveExportLinks');
+        linksDiv.innerHTML = '<span class="info">Exporting...</span>';
+
+        try {
+            const resp = await fetch('/api/record/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ formats })
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                linksDiv.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
+                return;
+            }
+
+            linksDiv.innerHTML = '<div class="success"><strong>Exported:</strong><br>' +
+                data.files.map(f => escapeHtml(f)).join('<br>') + '</div>';
+
+        } catch (e) {
+            linksDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
         }
     }
 

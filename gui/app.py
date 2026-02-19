@@ -36,6 +36,7 @@ _live_thread = None
 _recording_mode = None
 _output_file = None
 _preview_only = False
+_live_segments = [] # Store all live segments for export
 
 # --- Post-processing state ---
 _post = {
@@ -180,7 +181,7 @@ def api_browse_folder():
 @app.route('/api/record/start', methods=['POST'])
 def api_record_start():
     global _capture, _transcriber, _live_thread, _stop_event
-    global _recording_mode, _output_file, _preview_only
+    global _recording_mode, _output_file, _preview_only, _live_segments
 
     if _capture and _capture.recording_process:
         return jsonify({'error': 'Recording already in progress'}), 400
@@ -240,6 +241,8 @@ def api_record_start():
     _stop_event = threading.Event()
     with _live_queue_lock:
         _live_queue.clear()
+    
+    _live_segments = [] # Clear previous live segments
 
     _transcriber = Transcriber()
 
@@ -247,6 +250,7 @@ def api_record_start():
         entry = {'text': text, 'start': start, 'end': end}
         with _live_queue_lock:
             _live_queue.append(entry)
+            _live_segments.append(entry)
 
     _live_thread = threading.Thread(
         target=_transcriber.transcribe_live,
@@ -298,6 +302,44 @@ def api_record_stop():
     if not save_ok:
         resp['warning'] = 'Recording stopped but audio file may not have been saved correctly'
     return jsonify(resp)
+
+@app.route('/api/record/export', methods=['POST'])
+def api_record_export():
+    """Export the live transcription segments to file(s)."""
+    global _live_segments, _output_file
+    
+    body = request.get_json(force=True)
+    formats = body.get('formats', [])
+    
+    if not _live_segments:
+        return jsonify({'error': 'No live transcription data available'}), 400
+    
+    if not _output_file:
+        # Fallback if preview only or no file set
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base_path = os.path.join(DATA_DIR, f'live_export_{timestamp}')
+    else:
+        base_path = os.path.splitext(_output_file)[0] + '_live'
+
+    # Construct a result object compatible with Exporter
+    # Live segments don't have speaker info usually, or just one speaker
+    result = {'segments': _live_segments}
+    
+    exported = []
+    try:
+        if 'txt' in formats:
+            Exporter.to_txt(result, base_path + '.txt')
+            exported.append(base_path + '.txt')
+        if 'json' in formats:
+            Exporter.to_json(result, base_path + '.json')
+            exported.append(base_path + '.json')
+        if 'srt' in formats:
+            Exporter.to_srt(result, base_path + '.srt')
+            exported.append(base_path + '.srt')
+            
+        return jsonify({'status': 'exported', 'files': exported})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/live')
