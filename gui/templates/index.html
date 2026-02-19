@@ -1298,10 +1298,42 @@
         }
     }
 
+    // ---- Persistence ----
+    const persistIds = [
+        'language',
+        'liveModel',
+        'chunkSize',
+        'postModel',
+        'postComputeType',
+        'beamSize',
+        'summaryModel',
+        'summaryDetail',
+        'summaryQuant'
+    ];
+
+    function initPersistence() {
+        persistIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+
+            // Load
+            const saved = localStorage.getItem('cenario_' + id);
+            if (saved !== null) {
+                el.value = saved;
+            }
+
+            // Save on change
+            el.addEventListener('change', () => {
+                localStorage.setItem('cenario_' + id, el.value);
+            });
+        });
+    }
+
     // ---- Init ----
     loadSources();
     loadFolders();
     checkPostStatus();
+    initPersistence();
 
     // Load persisted folder
     const savedFolder = localStorage.getItem('cenario_output_folder');
