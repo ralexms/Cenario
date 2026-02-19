@@ -9,10 +9,12 @@ class Summarizer:
 
     # Overhead tokens for chat template (system + user role markers, special tokens)
     _TEMPLATE_OVERHEAD = 200
-    # Default safe context budget in tokens (leaves room for generation + overhead)
-    _DEFAULT_CONTEXT_BUDGET = 12000
     # Overlap between chunks in tokens for context continuity
     _CHUNK_OVERLAP = 200
+    # Fraction of free VRAM to use for KV cache (keep 15% headroom)
+    _VRAM_USAGE_FRACTION = 0.85
+    # Fallback budget when VRAM estimation isn't possible (CPU mode)
+    _FALLBACK_CONTEXT_BUDGET = 16000
 
     def __init__(self, model_id="Qwen/Qwen2.5-0.5B-Instruct", device="cuda", quantization="4"):
         self.model_id = model_id
@@ -102,17 +104,54 @@ class Summarizer:
         """Count tokens for a text string using the model's tokenizer."""
         return len(self.pipe.tokenizer.encode(text, add_special_tokens=False))
 
-    def _get_context_budget(self, max_new_tokens):
-        """Return safe chunk size in tokens, accounting for generation and overhead."""
-        if hasattr(self.pipe.model, 'config') and hasattr(self.pipe.model.config, 'max_position_embeddings'):
-            model_max = self.pipe.model.config.max_position_embeddings
-        else:
-            model_max = 32768  # Conservative default
+    def _estimate_kv_bytes_per_token(self):
+        """Estimate KV cache memory per token from model config."""
+        config = self.pipe.model.config
 
-        # Budget = model context window - generation tokens - template overhead - safety margin
-        budget = model_max - max_new_tokens - self._TEMPLATE_OVERHEAD - 512
-        # Clamp to our default budget to stay within VRAM limits
-        return min(budget, self._DEFAULT_CONTEXT_BUDGET)
+        num_layers = getattr(config, 'num_hidden_layers', 24)
+        # GQA models have fewer KV heads than attention heads
+        num_kv_heads = getattr(config, 'num_key_value_heads',
+                               getattr(config, 'num_attention_heads', 16))
+        hidden_size = getattr(config, 'hidden_size', 1024)
+        num_heads = getattr(config, 'num_attention_heads', 16)
+        head_dim = hidden_size // num_heads
+
+        # KV cache: 2 (K+V) × num_layers × num_kv_heads × head_dim × dtype_bytes
+        # KV cache is typically stored in float16 (2 bytes) regardless of weight quantization
+        dtype_bytes = 2
+        bytes_per_token = 2 * num_layers * num_kv_heads * head_dim * dtype_bytes
+        return bytes_per_token
+
+    def _get_context_budget(self, max_new_tokens):
+        """Return safe input token budget based on VRAM and model context window."""
+        config = self.pipe.model.config
+        model_max = getattr(config, 'max_position_embeddings', 32768)
+
+        # Maximum tokens the model supports for input
+        model_budget = model_max - max_new_tokens - self._TEMPLATE_OVERHEAD - 512
+
+        # On GPU: estimate how many tokens fit in free VRAM
+        if self.device == "cuda" and torch.cuda.is_available():
+            try:
+                free_vram, _ = torch.cuda.mem_get_info()
+                usable_vram = free_vram * self._VRAM_USAGE_FRACTION
+                kv_bytes_per_token = self._estimate_kv_bytes_per_token()
+                # Total sequence = input + generated tokens; both consume KV cache
+                vram_budget = int(usable_vram / kv_bytes_per_token) - max_new_tokens - self._TEMPLATE_OVERHEAD
+                vram_budget = max(vram_budget, 1024)  # floor at 1K tokens
+
+                budget = min(model_budget, vram_budget)
+                print(f"Context budget: free_vram={free_vram/1e6:.0f}MB, "
+                      f"kv={kv_bytes_per_token}B/tok, "
+                      f"vram_budget={vram_budget}, model_budget={model_budget}, "
+                      f"final={budget}")
+                return budget
+            except Exception as e:
+                print(f"VRAM estimation failed ({e}), using model budget")
+                return min(model_budget, self._FALLBACK_CONTEXT_BUDGET)
+
+        # CPU: no VRAM constraint, just respect model context window
+        return model_budget
 
     def _split_text_into_chunks(self, text, chunk_token_size, overlap_tokens=None):
         """Split text into chunks respecting newline boundaries with token overlap."""
