@@ -294,12 +294,19 @@
         <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="liveModel">Live Preview Model</label>
-                <select id="liveModel">
-                    <option value="tiny" selected>tiny</option>
-                    <option value="base">base</option>
-                    <option value="small">small</option>
-                    <option value="medium">medium</option>
-                    <option value="large-v3">large-v3</option>
+                <select id="liveModel" onchange="updateLanguageForModel()">
+                    <optgroup label="General">
+                        <option value="tiny" selected>tiny</option>
+                        <option value="base">base</option>
+                        <option value="small">small</option>
+                        <option value="medium">medium</option>
+                        <option value="large-v3">large-v3</option>
+                    </optgroup>
+                    <optgroup label="French (bofenghuang)">
+                        <option value="bofenghuang/whisper-medium-french">French medium (769M)</option>
+                        <option value="bofenghuang/whisper-large-v3-french-distil-dec2">French large-v3 distil (0.8B, fast)</option>
+                        <option value="bofenghuang/whisper-large-v3-french">French large-v3 (2B)</option>
+                    </optgroup>
                 </select>
             </div>
             <div>
@@ -343,12 +350,19 @@
         <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="postModel">Model</label>
-                <select id="postModel">
-                    <option value="tiny">tiny</option>
-                    <option value="base">base</option>
-                    <option value="small">small</option>
-                    <option value="medium" selected>medium</option>
-                    <option value="large-v3">large-v3</option>
+                <select id="postModel" onchange="updateLanguageForModel()">
+                    <optgroup label="General">
+                        <option value="tiny">tiny</option>
+                        <option value="base">base</option>
+                        <option value="small">small</option>
+                        <option value="medium" selected>medium</option>
+                        <option value="large-v3">large-v3</option>
+                    </optgroup>
+                    <optgroup label="French (bofenghuang)">
+                        <option value="bofenghuang/whisper-medium-french">French medium (769M)</option>
+                        <option value="bofenghuang/whisper-large-v3-french-distil-dec2">French large-v3 distil (0.8B, fast)</option>
+                        <option value="bofenghuang/whisper-large-v3-french">French large-v3 (2B)</option>
+                    </optgroup>
                 </select>
             </div>
             <div>
@@ -549,6 +563,20 @@
     function toggleSummaryChunks() {
         const mode = document.getElementById('summaryChunking').value;
         document.getElementById('summaryNumChunksGroup').classList.toggle('hidden', mode !== 'always');
+    }
+
+    function updateLanguageForModel() {
+        const liveModel = document.getElementById('liveModel').value;
+        const postModel = document.getElementById('postModel').value;
+        const langSelect = document.getElementById('language');
+        const isFrench = liveModel.includes('french') || postModel.includes('french');
+        langSelect.disabled = isFrench;
+        if (isFrench) {
+            langSelect._savedValue = langSelect.value;
+            langSelect.value = 'fr';
+        } else if (langSelect._savedValue !== undefined) {
+            langSelect.value = langSelect._savedValue;
+        }
     }
 
     function fmtTime(sec) {
@@ -1400,6 +1428,7 @@
     loadFolders();
     checkPostStatus();
     initPersistence();
+    updateLanguageForModel();
 
     // Load persisted folder
     const savedFolder = localStorage.getItem('cenario_output_folder');

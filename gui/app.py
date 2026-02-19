@@ -202,6 +202,10 @@ def api_record_start():
     _preview_only = body.get('preview_only', False)
     language = body.get('language') or None
 
+    # French-specific models should not receive a language override
+    if 'french' in live_model.lower():
+        language = None
+
     if mode == 'stereo' and (not monitor or not mic):
         return jsonify({'error': 'Stereo mode requires both monitor and mic sources'}), 400
     if mode == 'mono' and not mic:
@@ -390,6 +394,11 @@ def api_postprocess_start():
     compute_type = body.get('compute_type') or None  # None = auto (float16 on CUDA)
     diarize = body.get('diarize', True)
     language = body.get('language') or None
+
+    # French-specific models should not receive a language override
+    if 'french' in model_size.lower():
+        language = None
+
     beam_size = body.get('beam_size', 5)
     vad_filter = body.get('vad_filter', False)
     stereo_mode = body.get('stereo_mode', 'joint') # Default to joint
