@@ -1277,7 +1277,8 @@
             const data = await resp.json();
 
             if (resp.ok) {
-                statusEl.innerHTML = '<span class="success">Saved to ' + escapeHtml(data.file) + '</span>';
+                const files = data.files || [data.file];
+                statusEl.innerHTML = '<span class="success">Saved to:<br>' + files.map(f => escapeHtml(f)).join('<br>') + '</span>';
             } else {
                 statusEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
             }

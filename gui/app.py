@@ -58,6 +58,7 @@ _summary = {
     'status': 'idle', # idle, summarizing, done, error
     'thread': None,
     'result': None,
+    'chunk_summaries': None,  # List of per-chunk summaries (only set for chunked mode)
     'error': None,
     'file': None,
     'stream_queue': [],
@@ -95,6 +96,7 @@ def _reset_summary_state():
     """Reset summarization state for a new run."""
     _summary['status'] = 'idle'
     _summary['result'] = None
+    _summary['chunk_summaries'] = None
     _summary['error'] = None
     _summary['file'] = None
     with _summary['stream_lock']:
@@ -821,6 +823,7 @@ def api_summarize_start():
             # Summarize
             summary_text = summarizer.summarize(full_text, detail_level=detail_level, stream_callback=stream_cb, chunking=chunking, num_chunks=num_chunks)
             _summary['result'] = summary_text
+            _summary['chunk_summaries'] = summarizer.chunk_summaries  # None if single-pass
             
             # Save summary
             if file_path.endswith('_transcription.json'):
@@ -888,22 +891,38 @@ def api_summarize_export_markdown():
 
     if not text:
         return jsonify({'error': 'No text to export'}), 400
-    
+
     if file_path:
         if file_path.endswith('_transcription.json'):
             base_path = file_path[:-len('_transcription.json')]
         else:
             base_path = os.path.splitext(file_path)[0]
-        md_path = base_path + '_summary.md'
     else:
         # Fallback
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        md_path = os.path.join(DATA_DIR, f'summary_{timestamp}.md')
+        base_path = os.path.join(DATA_DIR, f'summary_{timestamp}')
+
+    exported_files = []
 
     try:
+        # If chunked summaries exist, export them as a separate file
+        chunk_summaries = _summary.get('chunk_summaries')
+        if chunk_summaries:
+            chunks_path = base_path + '_chunk_summaries.md'
+            with open(chunks_path, 'w', encoding='utf-8') as f:
+                for i, cs in enumerate(chunk_summaries):
+                    f.write(f"## Chunk {i+1} of {len(chunk_summaries)}\n\n")
+                    f.write(cs.strip())
+                    f.write("\n\n---\n\n")
+            exported_files.append(chunks_path)
+
+        # Export the final summary
+        md_path = base_path + '_summary.md'
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(text)
-        return jsonify({'status': 'exported', 'file': md_path})
+        exported_files.append(md_path)
+
+        return jsonify({'status': 'exported', 'files': exported_files, 'file': md_path})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

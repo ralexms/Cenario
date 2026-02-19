@@ -22,6 +22,7 @@ class Summarizer:
         self.device = device
         self.quantization = quantization  # "4", "8", or "none"
         self.pipe = None
+        self.chunk_summaries = None  # Populated during chunked summarization
 
     def load_model(self):
         if self.pipe is not None:
@@ -275,6 +276,36 @@ class Summarizer:
         if self.device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _build_reduce_prompt(self, combined_summaries, num_parts, detail_level):
+        """Build the reduce-phase prompt that merges chunk summaries."""
+        prompt = (
+            f"Below are summaries of {num_parts} consecutive parts of a single meeting transcript. "
+            "Combine them into one unified, coherent summary.\n\n"
+            f"{combined_summaries}\n\n"
+            "Please provide:\n"
+        )
+
+        if detail_level == "detailed":
+            prompt += (
+                "1. A detailed summary of the full discussion, covering key points discussed "
+                "and arguments, as well as possible problems or difficulties.\n"
+                "2. A comprehensive list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned."
+            )
+        elif detail_level == "comprehensive":
+            prompt += (
+                "1. A comprehensive summary of the full discussion, including context, key decisions, "
+                "and nuances, as well as possible problems or difficulties.\n"
+                "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
+                "3. Any open questions or unresolved issues.\nBe as detailed and thorough as possible."
+            )
+        else:
+            prompt += (
+                "1. A concise summary of the full discussion.\n"
+                "2. A list of action points (tasks, decisions, or follow-ups)."
+            )
+
+        return prompt
+
     # ---- Chunked summarization (map-reduce) ----
 
     def summarize_chunked(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, num_chunks=None):
@@ -290,9 +321,11 @@ class Summarizer:
         chunk_content_budget = context_budget - 60
 
         if num_chunks is not None:
-             # If num_chunks is specified, we try to split the text into that many chunks
-             # We calculate the approximate tokens per chunk
-             tokens_per_chunk = math.ceil(input_tokens / num_chunks)
+             # Account for overlap: each chunk boundary adds overlap tokens,
+             # so effective new content per chunk is (chunk_size - overlap).
+             # To produce exactly num_chunks: chunk_size = (T + (N-1)*O) / N
+             overlap = self._CHUNK_OVERLAP
+             tokens_per_chunk = math.ceil((input_tokens + (num_chunks - 1) * overlap) / num_chunks)
              # We use the smaller of the calculated size or the budget
              chunk_size = min(tokens_per_chunk, chunk_content_budget)
              chunks = self._split_text_into_chunks(text, chunk_size)
@@ -337,46 +370,32 @@ class Summarizer:
             # Free KV cache between chunks
             self._free_kv_cache()
 
+        # Store chunk summaries for export
+        self.chunk_summaries = list(chunk_summaries)
+
         # --- REDUCE phase: combine chunk summaries into final summary ---
         combined_summaries = "\n\n".join(
             f"## Summary of Part {i+1}\n{s}" for i, s in enumerate(chunk_summaries)
         )
 
-        # Check if combined summaries fit in context budget; if not, do hierarchical reduce
-        combined_tokens = self.count_tokens(combined_summaries)
-        if combined_tokens > context_budget - 100:
+        # Build the full reduce prompt so we can check total token count
+        reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level)
+
+        # Check FULL prompt tokens (system + user + template overhead) against budget
+        system_tokens = self.count_tokens(system_prompt)
+        total_input_tokens = system_tokens + self.count_tokens(reduce_prompt) + self._TEMPLATE_OVERHEAD
+        print(f"Reduce phase: total_input_tokens={total_input_tokens}, context_budget={context_budget}")
+
+        if total_input_tokens > context_budget:
+            # Compute how many tokens the summaries can occupy
+            summaries_budget = context_budget - system_tokens - self._TEMPLATE_OVERHEAD - 200  # 200 for reduce instructions
             combined_summaries = self._hierarchical_reduce(
-                chunk_summaries, system_prompt, max_new_tokens, context_budget, stream_callback
+                chunk_summaries, system_prompt, max_new_tokens, summaries_budget, stream_callback
             )
+            reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level)
 
         if stream_callback:
             stream_callback("\n\n--- Generating final summary ---\n\n")
-
-        reduce_prompt = (
-            f"Below are summaries of {num_chunks} consecutive parts of a single meeting transcript. "
-            "Combine them into one unified, coherent summary.\n\n"
-            f"{combined_summaries}\n\n"
-            "Please provide:\n"
-        )
-
-        if detail_level == "detailed":
-            reduce_prompt += (
-                "1. A detailed summary of the full discussion, covering key points discussed "
-                "and arguments, as well as possible problems or difficulties.\n"
-                "2. A comprehensive list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned."
-            )
-        elif detail_level == "comprehensive":
-            reduce_prompt += (
-                "1. A comprehensive summary of the full discussion, including context, key decisions, "
-                "and nuances, as well as possible problems or difficulties.\n"
-                "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
-                "3. Any open questions or unresolved issues.\nBe as detailed and thorough as possible."
-            )
-        else:
-            reduce_prompt += (
-                "1. A concise summary of the full discussion.\n"
-                "2. A list of action points (tasks, decisions, or follow-ups)."
-            )
 
         self._free_kv_cache()
         return self._summarize_single(system_prompt, reduce_prompt, max_new_tokens, stream_callback)
@@ -432,6 +451,7 @@ class Summarizer:
             num_chunks: Optional number of chunks to split the text into (if chunking is "always").
         """
         thread = None
+        self.chunk_summaries = None
         try:
             self.load_model()
 
