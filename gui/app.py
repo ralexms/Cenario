@@ -780,6 +780,7 @@ def api_summarize_start():
     model_id = body.get('model', 'Qwen/Qwen2.5-0.5B-Instruct')
     detail_level = body.get('detail_level', 'concise')
     quantization = body.get('quantization', '4')
+    chunking = body.get('chunking', 'auto')
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -817,7 +818,7 @@ def api_summarize_start():
                     _summary['stream_queue'].append(chunk)
 
             # Summarize
-            summary_text = summarizer.summarize(full_text, detail_level=detail_level, stream_callback=stream_cb)
+            summary_text = summarizer.summarize(full_text, detail_level=detail_level, stream_callback=stream_cb, chunking=chunking)
             _summary['result'] = summary_text
             
             # Save summary

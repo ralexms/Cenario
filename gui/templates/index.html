@@ -481,6 +481,16 @@
                     <span class="tooltiptext">4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM</span>
                 </div>
             </div>
+            <div>
+                <label for="summaryChunking">Long Text</label>
+                <div class="tooltip" style="width:100%">
+                    <select id="summaryChunking">
+                        <option value="auto" selected>Auto (chunk if needed)</option>
+                        <option value="always">Always chunk</option>
+                    </select>
+                    <span class="tooltiptext">Auto: chunks only when input exceeds safe token limit<br>Always: forces map-reduce chunking</span>
+                </div>
+            </div>
             <div style="display:flex;align-items:end;padding-bottom:10px;">
                 <button id="btnSummarize" class="btn-action" onclick="startSummarization()">Summarize</button>
             </div>
@@ -1176,6 +1186,7 @@
         const model = document.getElementById('summaryModel').value;
         const detailLevel = document.getElementById('summaryDetail').value;
         const quantization = document.getElementById('summaryQuant').value;
+        const chunking = document.getElementById('summaryChunking').value;
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -1192,7 +1203,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization })
+                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking })
             });
             const data = await resp.json();
 
@@ -1333,7 +1344,8 @@
         'chunkMinutes',
         'summaryModel',
         'summaryDetail',
-        'summaryQuant'
+        'summaryQuant',
+        'summaryChunking'
     ];
 
     function initPersistence() {
