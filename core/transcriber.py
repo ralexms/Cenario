@@ -300,16 +300,29 @@ class Transcriber:
                 if idx > 0:
                     self.unload_model()
 
-                # Collect segments for this chunk with adjusted timestamps
+                # Collect segments for this chunk with adjusted timestamps.
+                # For the first chunk all segments are emitted immediately.
+                # For later chunks, segments clearly past the overlap zone are
+                # emitted immediately; overlap-zone segments are held for
+                # deduplication before emission.
                 chunk_segments = []
+                _is_first_chunk = (idx == 0)
+                _overlap_end = chunk_start + overlap_seconds
 
-                def _chunk_cb(seg, _offset=chunk_start):
+                def _chunk_cb(seg, _offset=chunk_start,
+                              _first=_is_first_chunk,
+                              _ov_end=_overlap_end):
                     adjusted = {
                         'start': seg['start'] + _offset,
                         'end': seg['end'] + _offset,
                         'text': seg['text']
                     }
                     chunk_segments.append(adjusted)
+                    # Emit in real-time when safe to do so (no dedup needed)
+                    if on_segment:
+                        mid = (adjusted['start'] + adjusted['end']) / 2
+                        if _first or mid > _ov_end:
+                            on_segment(adjusted)
 
                 result = self.transcribe(chunk_file, model_size,
                                          language=detected_language,
@@ -322,21 +335,21 @@ class Transcriber:
                     detected_language = result.get('language', detected_language)
 
                 if idx == 0:
-                    # First chunk — emit all segments immediately
-                    for seg in chunk_segments:
-                        all_segments.append(seg)
-                        if on_segment:
-                            on_segment(seg)
+                    # All segments already emitted in real-time
+                    all_segments.extend(chunk_segments)
                 else:
-                    # Overlap zone: from chunk_start to chunk_start + overlap_seconds
+                    # Deduplicate overlap zone; non-overlap segments were
+                    # already emitted in real-time so only emit survivors
+                    # that fall inside the overlap zone here.
                     overlap_end = chunk_start + overlap_seconds
                     survived = _deduplicate_overlap(
                         all_segments, chunk_segments, chunk_start, overlap_end
                     )
-                    for seg in survived:
-                        all_segments.append(seg)
-                        if on_segment:
-                            on_segment(seg)
+                    for s in survived:
+                        all_segments.append(s)
+                        s_mid = (s['start'] + s['end']) / 2
+                        if on_segment and s_mid <= overlap_end:
+                            on_segment(s)
 
         finally:
             # Clean up temp files (skip original audio_file)
