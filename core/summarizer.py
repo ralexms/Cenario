@@ -295,9 +295,10 @@ class Summarizer:
         gen_params = dict(
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=0.3,
-            top_k=20,
-            repetition_penalty=1.2,
+            temperature=0.4,
+            top_k=40,
+            top_p=0.9,
+            repetition_penalty=1.05,
             return_full_text=False,
         )
 
