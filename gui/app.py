@@ -908,7 +908,7 @@ def api_summarize_stream():
                     yield f"data: {json.dumps({'text': item})}\n\n"
                 
                 if _summary['status'] == 'done':
-                    yield f"data: {json.dumps({'done': True})}\n\n"
+                    yield f"data: {json.dumps({'done': True, 'result': _summary['result']})}\n\n"
                 else:
                     yield f"data: {json.dumps({'error': _summary['error']})}\n\n"
                 break

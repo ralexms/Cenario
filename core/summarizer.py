@@ -281,21 +281,41 @@ class Summarizer:
     def _build_user_prompt(self, text, detail_level):
         """Build the user prompt for a given detail level."""
         if detail_level == "detailed":
-            return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A detailed summary of the discussion, covering key points discussed"
-                    "and arguments, as well as possible problems or difficulties in a few paragraphs.\n"
-                    "2. A detailed list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned.")
+            return (
+                f"Here is the meeting transcript:\n\n{text}\n\n"
+                "Write a detailed summary of the discussion in flowing prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph. "
+                "Cover all key topics discussed, the arguments and positions taken by each side, "
+                "any problems or difficulties raised, and important context. "
+                "Write at least two or three substantial paragraphs.\n\n"
+                "## Action Points\n"
+                "After the summary, list every concrete task, decision, or follow-up as a bulleted list. "
+                "Include the assigned owner next to each item if mentioned."
+            )
         elif detail_level == "comprehensive":
-            return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A comprehensive summary of the full discussion, including context, key decisions, "
-                    "and nuances, as well as possible problems or difficulties in a few paragraphs.\n"
-                    "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
-                    "3. Any open questions or unresolved issues.\n"
-                    "4. A list of key questions asked during the meeting along with their proposed answers if any.")
+            return (
+                f"Here is the meeting transcript:\n\n{text}\n\n"
+                "Write a comprehensive summary of the discussion in flowing prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph. "
+                "Cover all topics, the full context, key decisions and their rationale, nuances, "
+                "and any problems or difficulties raised. Be thorough and detailed.\n\n"
+                "## Action Points\n"
+                "List every concrete task, decision, or follow-up as a bulleted list, "
+                "with assigned owners if mentioned.\n\n"
+                "## Open Questions\n"
+                "List any unresolved issues or open questions as a bulleted list.\n\n"
+                "## Key Questions & Answers\n"
+                "List the key questions raised during the meeting and their proposed answers (if any) as a bulleted list."
+            )
         else:  # concise
-            return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A concise summary of the discussion in a few paragraphs.\n"
-                    "2. A list of action points (tasks, decisions, or follow-ups).")
+            return (
+                f"Here is the meeting transcript:\n\n{text}\n\n"
+                "Write a concise summary of the discussion in a few prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph "
+                "covering the main topics and outcomes.\n\n"
+                "## Action Points\n"
+                "After the summary, list any tasks, decisions, or follow-ups as a bulleted list."
+            )
 
     def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
         """Run a single generation pass. Returns the generated text."""
@@ -370,33 +390,44 @@ class Summarizer:
 
     def _build_reduce_prompt(self, combined_summaries, num_parts, detail_level):
         """Build the reduce-phase prompt that merges chunk summaries."""
-        prompt = (
+        base = (
             f"Below are summaries of {num_parts} consecutive parts of a single meeting transcript. "
-            "Combine them into one unified, coherent summary.\n\n"
+            "Read all of them carefully, then write one unified summary that covers the entire meeting.\n\n"
             f"{combined_summaries}\n\n"
-            "Please provide:\n"
         )
 
         if detail_level == "detailed":
-            prompt += (
-                "1. A detailed summary of the full discussion, covering key points discussed "
-                "and arguments, as well as possible problems or difficulties.\n"
-                "2. A comprehensive list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned."
+            return (
+                base +
+                "Write a detailed summary of the full discussion in flowing prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph. "
+                "Cover all key topics, the arguments and positions taken, any problems or difficulties raised, "
+                "drawing from all parts of the meeting. Write at least two or three substantial paragraphs.\n\n"
+                "## Action Points\n"
+                "After the summary, list every concrete task, decision, or follow-up mentioned across all parts "
+                "as a bulleted list. Include the assigned owner next to each item if mentioned."
             )
         elif detail_level == "comprehensive":
-            prompt += (
-                "1. A comprehensive summary of the full discussion, including context, key decisions, "
-                "and nuances, as well as possible problems or difficulties.\n"
-                "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
-                "3. Any open questions or unresolved issues.\nBe as detailed and thorough as possible."
+            return (
+                base +
+                "Write a comprehensive summary of the full discussion in flowing prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph. "
+                "Cover all topics, the full context, key decisions and their rationale, nuances, "
+                "and any problems or difficulties, drawing from all parts of the meeting. Be thorough.\n\n"
+                "## Action Points\n"
+                "List every concrete task, decision, or follow-up as a bulleted list, with assigned owners if mentioned.\n\n"
+                "## Open Questions\n"
+                "List any unresolved issues or open questions as a bulleted list."
             )
-        else:
-            prompt += (
-                "1. A concise summary of the full discussion.\n"
-                "2. A list of action points (tasks, decisions, or follow-ups)."
+        else:  # concise
+            return (
+                base +
+                "Write a concise summary of the full discussion in a few prose paragraphs. "
+                "Do not start with a bullet list — begin directly with a narrative paragraph "
+                "covering the main topics and outcomes from the entire meeting.\n\n"
+                "## Action Points\n"
+                "After the summary, list any tasks, decisions, or follow-ups as a bulleted list."
             )
-
-        return prompt
 
     # ---- Chunked summarization (map-reduce) ----
 

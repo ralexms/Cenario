@@ -1233,6 +1233,8 @@
     }
 
     // ---- Summarization ----
+    let summaryFinalResult = '';  // Clean final result (no chunk progress noise)
+
     async function startSummarization() {
         const file = document.getElementById('summaryFile').value;
         if (!file) {
@@ -1256,6 +1258,7 @@
 
         statusDiv.innerHTML = '<span class="status processing">Summarizing...</span>';
         outputDiv.innerHTML = '';
+        summaryFinalResult = '';
         btn.disabled = true;
         btnStop.disabled = false;
         btnExport.disabled = true;
@@ -1292,6 +1295,7 @@
                 if (data.done) {
                     summaryEventSource.close();
                     summaryEventSource = null;
+                    summaryFinalResult = data.result || '';
                     statusDiv.innerHTML = '<span class="success">Done!</span>';
                     btn.disabled = false;
                     btnStop.disabled = true;
@@ -1335,7 +1339,7 @@
     }
 
     async function exportMarkdown() {
-        const text = document.getElementById('summaryOutput').textContent;
+        const text = summaryFinalResult || document.getElementById('summaryOutput').textContent;
         const file = document.getElementById('summaryFile').value;
         const statusEl = document.getElementById('exportMdStatus');
 
