@@ -501,8 +501,9 @@
                     <select id="summaryChunking" onchange="toggleSummaryChunks()">
                         <option value="auto" selected>Auto (chunk if needed)</option>
                         <option value="always">Always chunk</option>
+                        <option value="never">Never chunk</option>
                     </select>
-                    <span class="tooltiptext">Auto: chunks only when input exceeds safe token limit<br>Always: forces map-reduce chunking</span>
+                    <span class="tooltiptext">Auto: chunks only when input exceeds safe token limit<br>Always: forces map-reduce chunking<br>Never: attempts to process full text (may OOM)</span>
                 </div>
             </div>
             <div id="summaryNumChunksGroup" class="hidden">

@@ -521,7 +521,7 @@ class Summarizer:
             detail_level: "concise", "detailed", or "comprehensive".
             max_new_tokens: Max tokens to generate.
             stream_callback: Optional function(text_chunk) for real-time updates.
-            chunking: "auto" (chunk if input exceeds safe threshold) or "always" (force chunking).
+            chunking: "auto" (chunk if input exceeds safe threshold), "always" (force chunking), or "never".
             num_chunks: Optional number of chunks to split the text into (if chunking is "always").
         """
         self.chunk_summaries = None
@@ -530,13 +530,19 @@ class Summarizer:
 
             input_tokens = self.count_tokens(text)
             context_budget = self._get_context_budget(max_new_tokens)
-            needs_chunking = (chunking == "always") or (chunking == "auto" and input_tokens > context_budget)
+            
+            if chunking == "never":
+                needs_chunking = False
+            else:
+                needs_chunking = (chunking == "always") or (chunking == "auto" and input_tokens > context_budget)
 
             if stream_callback:
                 mode_str = "chunked" if needs_chunking else "single-pass"
                 reason = ""
                 if chunking == "always":
                     reason = " (forced)"
+                elif chunking == "never":
+                    reason = " (forced single-pass)"
                 elif needs_chunking:
                     reason = f" ({input_tokens} tokens > {context_budget} budget)"
                 stream_callback(f"[{input_tokens} tokens, mode: {mode_str}{reason}]\n\n")
@@ -552,6 +558,10 @@ class Summarizer:
             try:
                 return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
             except torch.cuda.OutOfMemoryError:
+                if chunking == "never":
+                    print("Single-pass OOM — chunking disabled, re-raising error")
+                    raise RuntimeError("GPU Out of Memory. Try enabling chunking or using a smaller model.")
+
                 print("Single-pass OOM — falling back to chunked mode")
                 self._free_kv_cache()
                 if stream_callback:
