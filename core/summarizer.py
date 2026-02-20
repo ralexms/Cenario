@@ -277,8 +277,11 @@ class Summarizer:
             "Always begin your response with a narrative prose paragraph — never start with a bullet point or list."
         )
 
-    def _build_user_prompt(self, text, detail_level):
+    def _build_user_prompt(self, text, detail_level, custom_prompt=None):
         """Build the user prompt for a given detail level."""
+        if custom_prompt and custom_prompt.strip():
+            return f"Here is the meeting transcript:\n\n{text}\n\n{custom_prompt}"
+
         if detail_level == "detailed":
             return (
                 f"Here is the meeting transcript:\n\n{text}\n\n"
@@ -402,13 +405,16 @@ class Summarizer:
         if self.device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def _build_reduce_prompt(self, combined_summaries, num_parts, detail_level):
+    def _build_reduce_prompt(self, combined_summaries, num_parts, detail_level, custom_prompt=None):
         """Build the reduce-phase prompt that merges chunk summaries."""
         base = (
             f"Below are summaries of {num_parts} consecutive parts of a single meeting transcript. "
             "Read all of them carefully, then write one unified summary that covers the entire meeting.\n\n"
             f"{combined_summaries}\n\n"
         )
+
+        if custom_prompt and custom_prompt.strip():
+            return base + custom_prompt
 
         if detail_level == "detailed":
             return (
@@ -445,7 +451,7 @@ class Summarizer:
 
     # ---- Chunked summarization (map-reduce) ----
 
-    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, num_chunks=None):
+    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, num_chunks=None, custom_prompt=None):
         """Map-reduce chunked summarization for long transcripts."""
         if max_new_tokens is None:
             max_new_tokens = self._MAX_NEW_TOKENS.get(detail_level, 2048)
@@ -496,9 +502,10 @@ class Summarizer:
 
         # If only 1 chunk, skip reduce phase
         if num_chunks == 1:
-            user_prompt = self._build_user_prompt(chunks[0], detail_level)
+            user_prompt = self._build_user_prompt(chunks[0], detail_level, custom_prompt=custom_prompt)
+            prefill = "The meeting" if not custom_prompt else None
             return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback,
-                                          prefill="The meeting")
+                                          prefill=prefill)
 
         # --- MAP phase: summarize each chunk ---
         chunk_summaries = []
@@ -542,7 +549,7 @@ class Summarizer:
         )
 
         # Build the full reduce prompt so we can check total token count
-        reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level)
+        reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level, custom_prompt=custom_prompt)
 
         # Check FULL prompt tokens (system + user + template overhead) against budget
         system_tokens = self.count_tokens(system_prompt)
@@ -555,14 +562,15 @@ class Summarizer:
             combined_summaries = self._hierarchical_reduce(
                 chunk_summaries, system_prompt, max_new_tokens, summaries_budget, stream_callback
             )
-            reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level)
+            reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level, custom_prompt=custom_prompt)
 
         if stream_callback:
             stream_callback("\n\n--- Generating final summary ---\n\n")
 
         self._free_kv_cache()
+        prefill = "The meeting" if not custom_prompt else None
         return self._summarize_single(system_prompt, reduce_prompt, max_new_tokens, stream_callback,
-                                      prefill="The meeting")
+                                      prefill=prefill)
 
     def _hierarchical_reduce(self, summaries, system_prompt, max_new_tokens, context_budget, stream_callback):
         """Reduce summaries in pairs when they exceed the context budget."""
@@ -613,7 +621,7 @@ class Summarizer:
         "comprehensive": 4096,
     }
 
-    def summarize(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, chunking="auto", num_chunks=None):
+    def summarize(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, chunking="auto", num_chunks=None, custom_prompt=None):
         """
         Summarize the text.
 
@@ -624,6 +632,7 @@ class Summarizer:
             stream_callback: Optional function(text_chunk) for real-time updates.
             chunking: "auto" (chunk if input exceeds safe threshold), "always" (force chunking), or "never".
             num_chunks: Optional number of chunks to split the text into (if chunking is "always").
+            custom_prompt: Optional custom prompt to override default instructions.
         """
         if max_new_tokens is None:
             max_new_tokens = self._MAX_NEW_TOKENS.get(detail_level, 2048)
@@ -654,14 +663,15 @@ class Summarizer:
             print(f"Summarize: {input_tokens} tokens, budget: {context_budget}, chunking: {chunking}, needs_chunking: {needs_chunking}")
 
             if needs_chunking:
-                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, num_chunks=num_chunks if chunking == "always" else None)
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, num_chunks=num_chunks if chunking == "always" else None, custom_prompt=custom_prompt)
 
             # Single-pass summarization — with OOM fallback to chunked mode
             system_prompt = self._get_system_prompt()
-            user_prompt = self._build_user_prompt(text, detail_level)
+            user_prompt = self._build_user_prompt(text, detail_level, custom_prompt=custom_prompt)
+            prefill = "The meeting" if not custom_prompt else None
             try:
                 return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback,
-                                              prefill="The meeting")
+                                              prefill=prefill)
             except torch.cuda.OutOfMemoryError:
                 if chunking == "never":
                     print("Single-pass OOM — chunking disabled, re-raising error")
@@ -671,7 +681,7 @@ class Summarizer:
                 self._free_kv_cache()
                 if stream_callback:
                     stream_callback("\n\n[Single-pass ran out of GPU memory, retrying with chunked mode...]\n\n")
-                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback)
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, custom_prompt=custom_prompt)
 
         except torch.cuda.OutOfMemoryError:
             print("CUDA Out of Memory Error caught in summarize()")

@@ -27,7 +27,7 @@
         .card-body { padding: 14px; }
 
         label { display: block; margin-bottom: 4px; font-size: 0.9em; color: #666; }
-        select, input[type="number"], input[type="text"] {
+        select, input[type="number"], input[type="text"], textarea {
             width: 100%;
             padding: 8px;
             border-radius: 4px;
@@ -35,6 +35,10 @@
             background: #fff;
             color: #333;
             margin-bottom: 10px;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
         }
 
         .row { display: flex; gap: 12px; }
@@ -519,6 +523,14 @@
                 <label for="summaryNumChunks">Number of Chunks</label>
                 <input type="number" id="summaryNumChunks" value="2" min="2" max="50">
             </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
+            <div>
+                <label for="summaryCustomPrompt">Custom Prompt (Optional)</label>
+                <textarea id="summaryCustomPrompt" placeholder="Leave empty for default prompt."></textarea>
+            </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
             <div style="display:flex;align-items:end;padding-bottom:10px;gap:10px;">
                 <button id="btnSummarize" class="btn-action" onclick="startSummarization()">Summarize</button>
                 <button id="btnStopSummarize" class="btn-stop" onclick="stopSummarization()" disabled>Stop</button>
@@ -1249,6 +1261,7 @@
         const numChunks = parseInt(document.getElementById('summaryNumChunks').value) || 2;
         const maxTokensRaw = document.getElementById('summaryMaxTokens').value;
         const maxTokens = maxTokensRaw ? parseInt(maxTokensRaw) : null;
+        const customPrompt = document.getElementById('summaryCustomPrompt').value;
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -1268,7 +1281,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens })
+                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens, custom_prompt: customPrompt })
             });
             const data = await resp.json();
 
