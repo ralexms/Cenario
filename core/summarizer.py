@@ -270,18 +270,19 @@ class Summarizer:
         """Build the user prompt for a given detail level."""
         if detail_level == "detailed":
             return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A detailed summary of the discussion, covering key points discussed "
-                    "and arguments, as well as possible problems or difficulties.\n"
-                    "2. A comprehensive list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned.")
+                    "Please provide:\n1. A detailed summary of the discussion, covering key points discussed"
+                    "and arguments, as well as possible problems or difficulties in a few paragraphs.\n"
+                    "2. A detailed list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned.")
         elif detail_level == "comprehensive":
             return (f"Here is the meeting transcript:\n\n{text}\n\n"
                     "Please provide:\n1. A comprehensive summary of the discussion, including context, key decisions, "
-                    "and nuances, as well as possible problems or difficulties.\n"
+                    "and nuances, as well as possible problems or difficulties in a few paragraphs.\n"
                     "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
-                    "3. Any open questions or unresolved issues.\nBe as detailed and thorough as possible.")
+                    "3. Any open questions or unresolved issues.\n"
+                    "4. A list of key questions asked during the meeting along with their proposed answers if any.")
         else:  # concise
             return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A concise summary of the discussion.\n"
+                    "Please provide:\n1. A concise summary of the discussion in a few paragraphs.\n"
                     "2. A list of action points (tasks, decisions, or follow-ups).")
 
     def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
