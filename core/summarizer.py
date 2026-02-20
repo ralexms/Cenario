@@ -141,6 +141,31 @@ class Summarizer:
         bytes_per_token = (2 * intermediate_size + hidden_size) * dtype_bytes
         return bytes_per_token
 
+    def _estimate_fixed_overhead(self):
+        """Estimate fixed VRAM overhead that is NOT proportional to sequence length.
+
+        For quantized models (4/8-bit), bitsandbytes dequantizes weight matrices
+        to fp16 on the fly during computation. The peak occurs in the FFN where
+        gate_proj and up_proj may both be dequantized simultaneously. This cost
+        is per-layer (not accumulated) but is a large fixed allocation.
+        Also accounts for CUDA workspace, cuBLAS handles, and other runtime overhead.
+        """
+        config = self.pipe.model.config
+        hidden_size = getattr(config, 'hidden_size', 1024)
+        intermediate_size = getattr(config, 'intermediate_size', 4 * hidden_size)
+        dtype_bytes = 2  # fp16
+
+        overhead = 0
+
+        # Dequantization buffers: peak is 2 FFN projections (gate + up) at fp16
+        if self.quantization in ("4", "8"):
+            overhead += 2 * intermediate_size * hidden_size * dtype_bytes
+
+        # CUDA context, cuBLAS workspace, kernel launch buffers, allocator fragmentation
+        overhead += 64 * 1024 * 1024  # 64 MiB flat
+
+        return overhead
+
     def _get_context_budget(self, max_new_tokens):
         """Return safe input token budget based on VRAM and model context window."""
         config = self.pipe.model.config
@@ -153,7 +178,9 @@ class Summarizer:
         if self.device == "cuda" and torch.cuda.is_available():
             try:
                 free_vram, _ = torch.cuda.mem_get_info()
-                usable_vram = free_vram * self._VRAM_USAGE_FRACTION
+                fixed_overhead = self._estimate_fixed_overhead()
+                usable_vram = free_vram * self._VRAM_USAGE_FRACTION - fixed_overhead
+                usable_vram = max(usable_vram, 0)
                 kv_bytes_per_token = self._estimate_kv_bytes_per_token()
                 activation_bytes_per_token = self._estimate_activation_bytes_per_token()
                 # KV cache persists across all layers; activation is peak per-layer
@@ -165,6 +192,8 @@ class Summarizer:
 
                 budget = min(model_budget, vram_budget)
                 print(f"Context budget: free_vram={free_vram/1e6:.0f}MB, "
+                      f"fixed_overhead={fixed_overhead/1e6:.0f}MB, "
+                      f"usable_vram={usable_vram/1e6:.0f}MB, "
                       f"kv={kv_bytes_per_token}B/tok, "
                       f"activation={activation_bytes_per_token}B/tok, "
                       f"total={total_bytes_per_token}B/tok, "
