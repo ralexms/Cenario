@@ -274,7 +274,8 @@ class Summarizer:
             "errors such as misspelled words, incorrect names, or garbled phrases. "
             "Use surrounding context to infer the correct meaning when something doesn't make sense. "
             "Do not reproduce transcription errors in your summary. "
-            "Always begin your response with a narrative prose paragraph — never start with a bullet point or list."
+            "Your task is to analyze the provided transcript and generate a structured markdown output "
+            "containing a summary of the meeting and a list of action points."
         )
 
     def _build_user_prompt(self, text, detail_level, custom_prompt=None):
@@ -319,14 +320,8 @@ class Summarizer:
                 "After the summary, list any tasks, decisions, or follow-ups as a bulleted list."
             )
 
-    def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None, prefill=None):
-        """Run a single generation pass. Returns the generated text.
-
-        Args:
-            prefill: Optional string to pre-fill the start of the assistant response.
-                     Forces the model to continue in that style (paragraph-first).
-                     Requires transformers >= 4.43 for continue_final_message support.
-        """
+    def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
+        """Run a single generation pass. Returns the generated text."""
         if self.stop_event.is_set():
             raise RuntimeError("Summarization stopped by user")
 
@@ -334,8 +329,6 @@ class Summarizer:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        if prefill:
-            messages.append({"role": "assistant", "content": prefill})
 
         stopping_criteria = StoppingCriteriaList([StopSignalCriteria(self.stop_event)])
 
@@ -349,14 +342,8 @@ class Summarizer:
             return_full_text=False,
             stopping_criteria=stopping_criteria,
         )
-        if prefill:
-            gen_params['continue_final_message'] = True
 
         if stream_callback:
-            # Emit the prefill text immediately so the display is correct
-            if prefill:
-                stream_callback(prefill)
-
             streamer = TextIteratorStreamer(self.pipe.tokenizer, skip_prompt=True, skip_special_tokens=True)
 
             generation_kwargs = dict(text_inputs=messages, streamer=streamer, **gen_params)
@@ -391,13 +378,12 @@ class Summarizer:
             if self.stop_event.is_set():
                 raise RuntimeError("Summarization stopped by user")
 
-            return (prefill + generated_text) if prefill else generated_text
+            return generated_text
         else:
             outputs = self.pipe(messages, **gen_params)
             if self.stop_event.is_set():
                 raise RuntimeError("Summarization stopped by user")
-            result = outputs[0]["generated_text"]
-            return (prefill + result) if prefill else result
+            return outputs[0]["generated_text"]
 
     def _free_kv_cache(self):
         """Free KV cache VRAM between generation passes."""
@@ -502,10 +488,9 @@ class Summarizer:
 
         # If only 1 chunk, skip reduce phase
         if num_chunks == 1:
-            user_prompt = self._build_user_prompt(chunks[0], detail_level, custom_prompt=custom_prompt)
-            prefill = "The meeting" if not custom_prompt else None
-            return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback,
-                                          prefill=prefill)
+            user_prompt = self._build_user_prompt(chunks[0], detail_level)
+            return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
+
 
         # --- MAP phase: summarize each chunk ---
         chunk_summaries = []
@@ -527,8 +512,7 @@ class Summarizer:
             )
 
             try:
-                summary = self._summarize_single(system_prompt, chunk_prompt, max_new_tokens, stream_callback,
-                                                 prefill="This section of the meeting")
+                summary = self._summarize_single(system_prompt, chunk_prompt, max_new_tokens, stream_callback)
                 chunk_summaries.append(summary)
             except torch.cuda.OutOfMemoryError:
                 print(f"OOM during chunk {i+1}/{num_chunks}")
@@ -568,9 +552,7 @@ class Summarizer:
             stream_callback("\n\n--- Generating final summary ---\n\n")
 
         self._free_kv_cache()
-        prefill = "The meeting" if not custom_prompt else None
-        return self._summarize_single(system_prompt, reduce_prompt, max_new_tokens, stream_callback,
-                                      prefill=prefill)
+        return self._summarize_single(system_prompt, reduce_prompt, max_new_tokens, stream_callback)
 
     def _hierarchical_reduce(self, summaries, system_prompt, max_new_tokens, context_budget, stream_callback):
         """Reduce summaries in pairs when they exceed the context budget."""
@@ -598,8 +580,7 @@ class Summarizer:
                     f"{pair_text}"
                 )
 
-                result = self._summarize_single(system_prompt, pair_prompt, max_new_tokens, stream_callback,
-                                               prefill="The meeting")
+                result = self._summarize_single(system_prompt, pair_prompt, max_new_tokens, stream_callback)
                 reduced.append(result)
                 self._free_kv_cache()
 
@@ -668,10 +649,9 @@ class Summarizer:
             # Single-pass summarization — with OOM fallback to chunked mode
             system_prompt = self._get_system_prompt()
             user_prompt = self._build_user_prompt(text, detail_level, custom_prompt=custom_prompt)
-            prefill = "The meeting" if not custom_prompt else None
+
             try:
-                return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback,
-                                              prefill=prefill)
+                return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
             except torch.cuda.OutOfMemoryError:
                 if chunking == "never":
                     print("Single-pass OOM — chunking disabled, re-raising error")
