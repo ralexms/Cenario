@@ -383,7 +383,16 @@ class Summarizer:
              chunks = self._split_text_into_chunks(text, chunk_size)
         else:
              chunks = self._split_text_into_chunks(text, chunk_content_budget)
-             
+             # Add one extra chunk as safety margin — VRAM estimation is inherently
+             # imprecise (fragmentation, runtime buffers, driver overhead), so
+             # slightly over-chunking is cheaper than hitting OOM.
+             if len(chunks) > 1:
+                 target_chunks = len(chunks) + 1
+                 overlap = self._CHUNK_OVERLAP
+                 safer_size = math.ceil((input_tokens + (target_chunks - 1) * overlap) / target_chunks)
+                 safer_size = min(safer_size, chunk_content_budget)
+                 chunks = self._split_text_into_chunks(text, safer_size)
+
         num_chunks = len(chunks)
 
         if stream_callback:
