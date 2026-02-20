@@ -1,9 +1,16 @@
 import torch
-from transformers import pipeline, TextIteratorStreamer, BitsAndBytesConfig
+from transformers import pipeline, TextIteratorStreamer, BitsAndBytesConfig, StoppingCriteria, StoppingCriteriaList
 import gc
 import os
 import threading
 import math
+
+class StopSignalCriteria(StoppingCriteria):
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return self.stop_event.is_set()
 
 class Summarizer:
     """Handles summarization and action point extraction using a local LLM."""
@@ -23,6 +30,11 @@ class Summarizer:
         self.quantization = quantization  # "4", "8", or "none"
         self.pipe = None
         self.chunk_summaries = None  # Populated during chunked summarization
+        self.stop_event = threading.Event()
+
+    def stop(self):
+        """Signal the summarizer to stop processing."""
+        self.stop_event.set()
 
     def load_model(self):
         if self.pipe is not None:
@@ -275,7 +287,7 @@ class Summarizer:
                     "2. A detailed list of action points (tasks, decisions, or follow-ups) with assigned owners if mentioned.")
         elif detail_level == "comprehensive":
             return (f"Here is the meeting transcript:\n\n{text}\n\n"
-                    "Please provide:\n1. A comprehensive summary of the discussion, including context, key decisions, "
+                    "Please provide:\n1. A comprehensive summary of the full discussion, including context, key decisions, "
                     "and nuances, as well as possible problems or difficulties in a few paragraphs.\n"
                     "2. A detailed list of action points (tasks, decisions, or follow-ups).\n"
                     "3. Any open questions or unresolved issues.\n"
@@ -287,10 +299,15 @@ class Summarizer:
 
     def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
         """Run a single generation pass. Returns the generated text."""
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
+
+        stopping_criteria = StoppingCriteriaList([StopSignalCriteria(self.stop_event)])
 
         gen_params = dict(
             max_new_tokens=max_new_tokens,
@@ -300,6 +317,7 @@ class Summarizer:
             top_p=0.9,
             repetition_penalty=1.05,
             return_full_text=False,
+            stopping_criteria=stopping_criteria,
         )
 
         if stream_callback:
@@ -324,6 +342,8 @@ class Summarizer:
 
             generated_text = ""
             for new_text in streamer:
+                if self.stop_event.is_set():
+                    break
                 generated_text += new_text
                 stream_callback(new_text)
 
@@ -331,10 +351,15 @@ class Summarizer:
 
             if thread_error[0] is not None:
                 raise thread_error[0]
+            
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user")
 
             return generated_text
         else:
             outputs = self.pipe(messages, **gen_params)
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user")
             return outputs[0]["generated_text"]
 
     def _free_kv_cache(self):
@@ -425,6 +450,9 @@ class Summarizer:
         # --- MAP phase: summarize each chunk ---
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user")
+
             if stream_callback:
                 header = f"\n--- Summarizing chunk {i+1}/{num_chunks} ---\n\n"
                 stream_callback(header)
@@ -483,6 +511,9 @@ class Summarizer:
         current = list(summaries)
         iteration = 0
         while len(current) > 1:
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user")
+
             iteration += 1
             reduced = []
             for i in range(0, len(current), 2):
@@ -538,6 +569,7 @@ class Summarizer:
         if max_new_tokens is None:
             max_new_tokens = self._MAX_NEW_TOKENS.get(detail_level, 2048)
         self.chunk_summaries = None
+        self.stop_event.clear()
         try:
             self.load_model()
 

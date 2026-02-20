@@ -62,7 +62,8 @@ _summary = {
     'error': None,
     'file': None,
     'stream_queue': [],
-    'stream_lock': threading.Lock()
+    'stream_lock': threading.Lock(),
+    'summarizer_instance': None # Keep track of the summarizer instance to stop it
 }
 
 
@@ -99,6 +100,7 @@ def _reset_summary_state():
     _summary['chunk_summaries'] = None
     _summary['error'] = None
     _summary['file'] = None
+    _summary['summarizer_instance'] = None
     with _summary['stream_lock']:
         _summary['stream_queue'] = []
 
@@ -804,6 +806,7 @@ def api_summarize_start():
 
     def run():
         summarizer = Summarizer(model_id=model_id, quantization=quantization)
+        _summary['summarizer_instance'] = summarizer
         try:
             # Load transcription based on file type
             ext = os.path.splitext(file_path)[1].lower()
@@ -865,12 +868,24 @@ def api_summarize_start():
             _summary['error'] = str(e)
         finally:
             summarizer.unload_model()
+            _summary['summarizer_instance'] = None
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
     _summary['thread'] = t
 
     return jsonify({'status': 'started', 'file': file_path})
+
+@app.route('/api/summarize/stop', methods=['POST'])
+def api_summarize_stop():
+    if _summary['status'] != 'summarizing':
+        return jsonify({'error': 'No summarization in progress'}), 400
+
+    if _summary['summarizer_instance']:
+        _summary['summarizer_instance'].stop()
+        return jsonify({'status': 'stopping'})
+    else:
+        return jsonify({'error': 'Summarizer instance not found'}), 500
 
 @app.route('/api/summarize/stream')
 def api_summarize_stream():
