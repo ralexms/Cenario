@@ -812,13 +812,25 @@ def api_summarize_start():
                 from core.exporter import _merge_stereo_segments
                 segments = _merge_stereo_segments(transcription)
                 lines = []
+                has_speakers = any(
+                    seg.get('speaker', 'UNKNOWN') != 'UNKNOWN' for seg in segments
+                )
                 for seg in segments:
-                    speaker = seg.get('speaker', 'UNKNOWN')
                     text = seg.get('text', '').strip()
-                    lines.append(f"{speaker}: {text}")
+                    if has_speakers:
+                        speaker = seg.get('speaker', 'UNKNOWN')
+                        lines.append(f"{speaker}: {text}")
+                    else:
+                        lines.append(text)
                 full_text = "\n".join(lines)
+            elif ext == '.txt':
+                # Strip timestamp prefixes ([MM:SS - MM:SS]) to reduce token count
+                import re
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    raw = f.read()
+                full_text = re.sub(r'^\[\d{2}:\d{2} - \d{2}:\d{2}\] ', '', raw, flags=re.MULTILINE)
             else:
-                # .txt and .srt — read as plain text
+                # .srt and others — read as plain text
                 with open(file_path, 'r', encoding='utf-8') as f:
                     full_text = f.read()
             
