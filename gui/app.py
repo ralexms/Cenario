@@ -793,6 +793,7 @@ def api_summarize_start():
     quantization = body.get('quantization', '4')
     chunking = body.get('chunking', 'auto')
     num_chunks = body.get('num_chunks', 2)
+    max_new_tokens = body.get('max_new_tokens')  # None = use detail-level default
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -842,7 +843,7 @@ def api_summarize_start():
                     _summary['stream_queue'].append(chunk)
 
             # Summarize
-            summary_text = summarizer.summarize(full_text, detail_level=detail_level, stream_callback=stream_cb, chunking=chunking, num_chunks=num_chunks)
+            summary_text = summarizer.summarize(full_text, detail_level=detail_level, max_new_tokens=max_new_tokens, stream_callback=stream_cb, chunking=chunking, num_chunks=num_chunks)
             _summary['result'] = summary_text
             _summary['chunk_summaries'] = summarizer.chunk_summaries  # None if single-pass
             

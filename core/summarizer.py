@@ -295,7 +295,7 @@ class Summarizer:
         gen_params = dict(
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=0.4,
+            temperature=0.6,
             top_k=40,
             top_p=0.9,
             repetition_penalty=1.05,
@@ -375,8 +375,10 @@ class Summarizer:
 
     # ---- Chunked summarization (map-reduce) ----
 
-    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, num_chunks=None):
+    def summarize_chunked(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, num_chunks=None):
         """Map-reduce chunked summarization for long transcripts."""
+        if max_new_tokens is None:
+            max_new_tokens = self._MAX_NEW_TOKENS.get(detail_level, 2048)
         self.load_model()
 
         context_budget = self._get_context_budget(max_new_tokens)
@@ -514,18 +516,27 @@ class Summarizer:
 
     # ---- Main entry point ----
 
-    def summarize(self, text, detail_level="concise", max_new_tokens=1024, stream_callback=None, chunking="auto", num_chunks=None):
+    # Max output tokens per detail level
+    _MAX_NEW_TOKENS = {
+        "concise": 1024,
+        "detailed": 2048,
+        "comprehensive": 4096,
+    }
+
+    def summarize(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, chunking="auto", num_chunks=None):
         """
         Summarize the text.
 
         Args:
             text: The transcript text.
             detail_level: "concise", "detailed", or "comprehensive".
-            max_new_tokens: Max tokens to generate.
+            max_new_tokens: Max tokens to generate. If None, scales with detail_level.
             stream_callback: Optional function(text_chunk) for real-time updates.
             chunking: "auto" (chunk if input exceeds safe threshold), "always" (force chunking), or "never".
             num_chunks: Optional number of chunks to split the text into (if chunking is "always").
         """
+        if max_new_tokens is None:
+            max_new_tokens = self._MAX_NEW_TOKENS.get(detail_level, 2048)
         self.chunk_summaries = None
         try:
             self.load_model()

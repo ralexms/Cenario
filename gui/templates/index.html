@@ -468,19 +468,28 @@
                 <div class="tooltip" style="width:100%">
                     <select id="summaryModel">
                         <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen 2.5 0.5B (Fast, Low VRAM)</option>
-                        <option value="Qwen/Qwen2.5-1.5B-Instruct" selected>Qwen 2.5 1.5B (Balanced)</option>
-                        <option value="Qwen/Qwen2.5-3B-Instruct">Qwen 2.5 3B (Better Quality)</option>
+                        <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen 2.5 1.5B (Balanced)</option>
+                        <option value="Qwen/Qwen2.5-3B-Instruct">Qwen 2.5 3B</option>
+                        <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B (Good quality)</option>
+                        <option value="microsoft/Phi-3.5-mini-instruct" selected>Phi 3.5 Mini 3.8B (Best quality)</option>
                     </select>
-                    <span class="tooltiptext">0.5B: ~0.5GB VRAM<br>1.5B: ~1GB VRAM<br>3B: ~2GB VRAM<br>(4-bit quantized)</span>
+                    <span class="tooltiptext">Qwen 0.5B: ~0.5GB, 1.5B: ~1GB, 3B: ~1.7GB<br>Llama 3.2 3B: ~1.8GB<br>Phi 3.5 Mini: ~2.2GB<br>(4-bit quantized)</span>
                 </div>
             </div>
             <div>
                 <label for="summaryDetail">Detail Level</label>
-                <select id="summaryDetail">
+                <select id="summaryDetail" onchange="updateMaxTokensPlaceholder()">
                     <option value="concise">Concise</option>
                     <option value="detailed" selected>Detailed</option>
                     <option value="comprehensive">Comprehensive</option>
                 </select>
+            </div>
+            <div>
+                <label for="summaryMaxTokens">Max Output Tokens</label>
+                <div class="tooltip" style="width:100%">
+                    <input type="number" id="summaryMaxTokens" placeholder="2048" min="128" max="8192" step="128">
+                    <span class="tooltiptext">Max tokens the model can generate.<br>Leave empty to use detail-level default:<br>Concise: 1024, Detailed: 2048, Comprehensive: 4096</span>
+                </div>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
@@ -488,8 +497,8 @@
                 <label for="summaryQuant">Quantization</label>
                 <div class="tooltip" style="width:100%">
                     <select id="summaryQuant">
-                        <option value="4">4-bit (Recommended)</option>
-                        <option value="8" selected>8-bit (Better quality)</option>
+                        <option value="4" selected>4-bit (Recommended)</option>
+                        <option value="8">8-bit (Better quality)</option>
                         <option value="none">None (Full precision)</option>
                     </select>
                     <span class="tooltiptext">4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM</span>
@@ -564,6 +573,12 @@
     function toggleSummaryChunks() {
         const mode = document.getElementById('summaryChunking').value;
         document.getElementById('summaryNumChunksGroup').classList.toggle('hidden', mode !== 'always');
+    }
+
+    function updateMaxTokensPlaceholder() {
+        const defaults = { concise: '1024', detailed: '2048', comprehensive: '4096' };
+        const detail = document.getElementById('summaryDetail').value;
+        document.getElementById('summaryMaxTokens').placeholder = defaults[detail] || '2048';
     }
 
     function updateLanguageForModel() {
@@ -1226,6 +1241,8 @@
         const quantization = document.getElementById('summaryQuant').value;
         const chunking = document.getElementById('summaryChunking').value;
         const numChunks = parseInt(document.getElementById('summaryNumChunks').value) || 2;
+        const maxTokensRaw = document.getElementById('summaryMaxTokens').value;
+        const maxTokens = maxTokensRaw ? parseInt(maxTokensRaw) : null;
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -1242,7 +1259,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks })
+                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens })
             });
             const data = await resp.json();
 
