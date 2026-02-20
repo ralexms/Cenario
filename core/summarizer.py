@@ -420,8 +420,15 @@ class Summarizer:
              # To produce exactly num_chunks: chunk_size = (T + (N-1)*O) / N
              overlap = self._CHUNK_OVERLAP
              tokens_per_chunk = math.ceil((input_tokens + (num_chunks - 1) * overlap) / num_chunks)
-             # We use the smaller of the calculated size or the budget
-             chunk_size = min(tokens_per_chunk, chunk_content_budget)
+             
+             # When user forces num_chunks, we respect it up to the model's hard limit,
+             # ignoring the VRAM estimation which might be too conservative.
+             config = self.pipe.model.config
+             model_max = getattr(config, 'max_position_embeddings', 32768)
+             model_hard_limit = model_max - max_new_tokens - self._TEMPLATE_OVERHEAD - 512 - 60
+
+             # We use the smaller of the calculated size or the hard model limit
+             chunk_size = min(tokens_per_chunk, model_hard_limit)
              chunks = self._split_text_into_chunks(text, chunk_size)
         else:
              chunks = self._split_text_into_chunks(text, chunk_content_budget)
