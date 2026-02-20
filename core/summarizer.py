@@ -124,6 +124,23 @@ class Summarizer:
         bytes_per_token = 2 * num_layers * num_kv_heads * head_dim * dtype_bytes
         return bytes_per_token
 
+    def _estimate_activation_bytes_per_token(self):
+        """Estimate peak activation memory per token during the forward pass.
+
+        During prefill, all input tokens are processed at once. The peak memory
+        per token comes from the FFN intermediate buffers (gate + up projections
+        for gated/SwiGLU architectures) which are the largest transient tensors.
+        """
+        config = self.pipe.model.config
+        hidden_size = getattr(config, 'hidden_size', 1024)
+        intermediate_size = getattr(config, 'intermediate_size', 4 * hidden_size)
+        dtype_bytes = 2  # float16
+
+        # Peak FFN activation: gate_proj and up_proj outputs alive simultaneously
+        # Plus attention Q projection and residual buffers (~hidden_size)
+        bytes_per_token = (2 * intermediate_size + hidden_size) * dtype_bytes
+        return bytes_per_token
+
     def _get_context_budget(self, max_new_tokens):
         """Return safe input token budget based on VRAM and model context window."""
         config = self.pipe.model.config
@@ -138,13 +155,19 @@ class Summarizer:
                 free_vram, _ = torch.cuda.mem_get_info()
                 usable_vram = free_vram * self._VRAM_USAGE_FRACTION
                 kv_bytes_per_token = self._estimate_kv_bytes_per_token()
+                activation_bytes_per_token = self._estimate_activation_bytes_per_token()
+                # KV cache persists across all layers; activation is peak per-layer
+                # but spans all tokens during prefill. Both scale linearly with seq_len.
+                total_bytes_per_token = kv_bytes_per_token + activation_bytes_per_token
                 # Total sequence = input + generated tokens; both consume KV cache
-                vram_budget = int(usable_vram / kv_bytes_per_token) - max_new_tokens - self._TEMPLATE_OVERHEAD
+                vram_budget = int(usable_vram / total_bytes_per_token) - max_new_tokens - self._TEMPLATE_OVERHEAD
                 vram_budget = max(vram_budget, 1024)  # floor at 1K tokens
 
                 budget = min(model_budget, vram_budget)
                 print(f"Context budget: free_vram={free_vram/1e6:.0f}MB, "
                       f"kv={kv_bytes_per_token}B/tok, "
+                      f"activation={activation_bytes_per_token}B/tok, "
+                      f"total={total_bytes_per_token}B/tok, "
                       f"vram_budget={vram_budget}, model_budget={model_budget}, "
                       f"final={budget}")
                 return budget
