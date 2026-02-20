@@ -56,10 +56,24 @@ def _ensure_ct2_model(model_id):
             return model_class.from_pretrained(model_name_or_path, **kwargs)
 
     os.makedirs(ct2_dir, exist_ok=True)
-    converter = _CompatConverter(model_id, copy_files=[
-        "tokenizer.json", "preprocessor_config.json",
-    ])
+
+    # Only copy files that actually exist in the repo (some fine-tuned
+    # models ship without tokenizer.json)
+    from huggingface_hub import list_repo_files
+    repo_files = set(list_repo_files(model_id))
+    want_copy = ["tokenizer.json", "preprocessor_config.json"]
+    copy_files = [f for f in want_copy if f in repo_files]
+
+    converter = _CompatConverter(model_id, copy_files=copy_files)
     converter.convert(ct2_dir, quantization="float16", force=True)
+
+    # If tokenizer.json was missing, generate it from the model's tokenizer
+    if not os.path.isfile(os.path.join(ct2_dir, "tokenizer.json")):
+        print("Generating tokenizer.json from model tokenizer...")
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(model_id)
+        tok.save_pretrained(ct2_dir)
+
     print(f"Conversion complete — saved to {ct2_dir}")
     return ct2_dir
 
