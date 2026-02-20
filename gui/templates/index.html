@@ -608,6 +608,7 @@
     }
 
     function addSegment(container, data) {
+        const isAtBottom = (container.scrollHeight - container.scrollTop) <= (container.clientHeight + 50);
         const div = document.createElement('div');
         div.className = 'segment';
         let html = '<span class="time">[' + fmtTime(data.start) + ']</span> ';
@@ -620,7 +621,9 @@
         html += '<span class="text">' + escapeHtml(data.text) + '</span>';
         div.innerHTML = html;
         container.appendChild(div);
-        container.scrollTop = container.scrollHeight;
+        if (isAtBottom) {
+            container.scrollTop = container.scrollHeight;
+        }
     }
 
     // ---- Browse Folder ----
@@ -1276,8 +1279,11 @@
             summaryEventSource.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 if (data.text) {
+                    const isAtBottom = (outputDiv.scrollHeight - outputDiv.scrollTop) <= (outputDiv.clientHeight + 50);
                     outputDiv.textContent += data.text;
-                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                    if (isAtBottom) {
+                        outputDiv.scrollTop = outputDiv.scrollHeight;
+                    }
                 }
                 if (data.done) {
                     summaryEventSource.close();
