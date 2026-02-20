@@ -511,7 +511,6 @@ class Summarizer:
             chunking: "auto" (chunk if input exceeds safe threshold) or "always" (force chunking).
             num_chunks: Optional number of chunks to split the text into (if chunking is "always").
         """
-        thread = None
         self.chunk_summaries = None
         try:
             self.load_model()
@@ -534,21 +533,23 @@ class Summarizer:
             if needs_chunking:
                 return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, num_chunks=num_chunks if chunking == "always" else None)
 
-            # Single-pass summarization
+            # Single-pass summarization — with OOM fallback to chunked mode
             system_prompt = self._get_system_prompt()
             user_prompt = self._build_user_prompt(text, detail_level)
-            return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
+            try:
+                return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
+            except torch.cuda.OutOfMemoryError:
+                print("Single-pass OOM — falling back to chunked mode")
+                self._free_kv_cache()
+                if stream_callback:
+                    stream_callback("\n\n[Single-pass ran out of GPU memory, retrying with chunked mode...]\n\n")
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback)
 
         except torch.cuda.OutOfMemoryError:
             print("CUDA Out of Memory Error caught in summarize()")
-            # Wait for any generation thread to finish so it releases references
-            if stream_callback and thread is not None:
-                thread.join(timeout=5)
             self.unload_model()
-            raise RuntimeError("GPU Out of Memory. Try a smaller model, enable quantization, or use chunked mode for long transcripts.")
+            raise RuntimeError("GPU Out of Memory even in chunked mode. Try a smaller model or enable quantization.")
         except Exception as e:
             print(f"Summarization error: {e}")
-            if stream_callback and thread is not None:
-                thread.join(timeout=5)
             self.unload_model()
             raise
