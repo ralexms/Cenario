@@ -291,19 +291,33 @@ class Summarizer:
             {"role": "user", "content": user_prompt}
         ]
 
-        thread = None
+        gen_params = dict(
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.3,
+            top_k=20,
+            repetition_penalty=1.2,
+            return_full_text=False,
+        )
+
         if stream_callback:
             streamer = TextIteratorStreamer(self.pipe.tokenizer, skip_prompt=True, skip_special_tokens=True)
 
-            generation_kwargs = dict(
-                text_inputs=messages,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                return_full_text=False,
-                streamer=streamer
-            )
+            generation_kwargs = dict(text_inputs=messages, streamer=streamer, **gen_params)
 
-            thread = threading.Thread(target=self.pipe, kwargs=generation_kwargs)
+            # Capture exceptions from the generation thread so they propagate
+            # to the main thread — TextIteratorStreamer does not do this.
+            thread_error = [None]
+
+            def _generate():
+                try:
+                    self.pipe(**generation_kwargs)
+                except BaseException as e:
+                    thread_error[0] = e
+                    # Unblock the streamer iterator by sending the stop signal
+                    streamer.text_queue.put(streamer.stop_signal)
+
+            thread = threading.Thread(target=_generate)
             thread.start()
 
             generated_text = ""
@@ -312,14 +326,13 @@ class Summarizer:
                 stream_callback(new_text)
 
             thread.join()
+
+            if thread_error[0] is not None:
+                raise thread_error[0]
+
             return generated_text
         else:
-            outputs = self.pipe(
-                messages,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                return_full_text=False
-            )
+            outputs = self.pipe(messages, **gen_params)
             return outputs[0]["generated_text"]
 
     def _free_kv_cache(self):
