@@ -21,9 +21,10 @@ Cenario is a local, privacy-focused meeting transcription and summarization tool
 
 ## Requirements
 
-*   **OS**: Linux (PulseAudio/PipeWire) or Windows (WASAPI)
-*   **GPU**: NVIDIA GPU with CUDA support recommended (4GB+ VRAM for summarization).
-*   **Python**: 3.8+
+*   **OS**: Linux (PulseAudio/PipeWire), Windows (WASAPI), or macOS (CoreAudio)
+*   **GPU**: NVIDIA GPU with CUDA recommended (4GB+ VRAM for summarization). Apple Silicon MPS is used automatically for diarization on Mac. CPU fallback is available on all platforms.
+*   **Python**: 3.10+
+*   **macOS only — system audio capture**: macOS does not expose loopback audio natively. To capture meeting audio from your speakers you need a free virtual audio driver. [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) is recommended (`brew install blackhole-2ch`). Microphone-only recording works without it.
 
 ## Installation
 
@@ -39,6 +40,22 @@ bash installer/install.sh --install-dir /opt/cenario
 # Force CPU-only (skip CUDA detection)
 bash installer/install.sh --cpu-only
 ```
+
+### macOS
+
+```bash
+# Default install to ~/cenario
+bash installer/install-mac.sh
+
+# Custom location
+bash installer/install-mac.sh --install-dir /opt/cenario
+```
+
+> **System audio capture**: Install [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) before or after running the installer. The GUI will display a setup banner until it is detected.
+> ```bash
+> brew install blackhole-2ch
+> ```
+> After installing BlackHole, restart any active audio applications and click **Check again** in the Cenario banner. Cenario will then list it as a loopback source automatically.
 
 ### Windows (PowerShell)
 
@@ -60,7 +77,7 @@ If PowerShell blocks script execution, run: `Set-ExecutionPolicy -ExecutionPolic
 ### GUI (Web Interface)
 
 ```bash
-# Linux
+# Linux / macOS
 ~/cenario/cenario-gui
 
 # Windows
@@ -111,3 +128,5 @@ You can also run Cenario from the terminal.
 *   **CUDA Out of Memory**: If you encounter OOM errors during summarization, try selecting the **0.5B** model or closing other GPU-intensive applications. The application attempts to handle this gracefully by unloading models when not in use.
 *   **Audio Sources (Linux)**: If you don't see your monitor source, ensure you are using PulseAudio or PipeWire and that your recording device is set to "Monitor of..." in your system sound settings.
 *   **Audio Sources (Windows)**: System audio capture uses WASAPI loopback. If loopback recording fails, ensure your output device supports shared mode. The default output device is auto-selected.
+*   **Audio Sources (macOS)**: System audio capture requires a virtual loopback device. Install [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) (`brew install blackhole-2ch`). Once installed, restart any active audio apps and click **Check again** in the Cenario warning banner — it will disappear once BlackHole is detected. Without BlackHole only your microphone is available.
+*   **Summarization on Mac (no GPU)**: The local LLM summarizer runs on CPU. Expect slower generation times compared to a CUDA or Apple Silicon MPS GPU. Choosing the **0.5B** model keeps it fast enough for practical use.
