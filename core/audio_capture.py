@@ -23,6 +23,8 @@ if PLATFORM == 'Windows':
         _HAS_PYCAW = True
     except ImportError:
         _HAS_PYCAW = False
+elif PLATFORM == 'Darwin':
+    import sounddevice as sd
 
 
 class _LoopbackCapture:
@@ -198,6 +200,8 @@ class AudioCapture:
         """List all available audio sources (platform-aware)."""
         if PLATFORM == 'Windows':
             return AudioCapture._list_sources_windows()
+        if PLATFORM == 'Darwin':
+            return AudioCapture._list_sources_mac()
         return AudioCapture._list_sources_linux()
 
     @staticmethod
@@ -215,6 +219,39 @@ class AudioCapture:
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             print(f"Error listing sources: {e}")
             return []
+
+    @staticmethod
+    def _list_sources_mac():
+        """List audio input devices on macOS via sounddevice.
+
+        Regular microphones get the prefix 'input_<idx>'.
+        Virtual loopback devices (BlackHole, Soundflower, etc.) get 'loopback_<idx>'.
+        To capture system audio you need a virtual audio driver such as
+        BlackHole (https://github.com/ExistentialAudio/BlackHole).
+        """
+        devices = sd.query_devices()
+        default_input_name = None
+        try:
+            default_input_name = sd.query_devices(kind='input')['name']
+        except Exception:
+            pass
+
+        _LOOPBACK_KEYWORDS = ('blackhole', 'loopback', 'soundflower', 'virtual')
+        sources = []
+        for i, d in enumerate(devices):
+            if d['max_input_channels'] > 0:
+                name = d['name']
+                state = 'RUNNING' if name == default_input_name else 'IDLE'
+                is_loopback = any(kw in name.lower() for kw in _LOOPBACK_KEYWORDS)
+                prefix = 'loopback' if is_loopback else 'input'
+                sources.append({
+                    'name': f"{prefix}_{i}",
+                    'description': name,
+                    'state': state,
+                    'index': i,
+                    'default_samplerate': d['default_samplerate'],
+                })
+        return sources
 
     @staticmethod
     def _list_sources_windows():
@@ -449,6 +486,224 @@ class AudioCapture:
             self._restore_outputs(saved_mute)
 
     # ------------------------------------------------------------------ #
+    #  Mac (CoreAudio / sounddevice) helpers                               #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _parse_mac_source(source_name):
+        """Parse a Mac source name into (device_index, is_loopback).
+
+        'loopback_5' -> (5, True),  'input_3' -> (3, False).
+        """
+        if source_name.startswith('loopback_'):
+            return int(source_name.split('_', 1)[1]), True
+        elif source_name.startswith('input_'):
+            return int(source_name.split('_', 1)[1]), False
+        else:
+            raise ValueError(f"Unknown Mac source format: {source_name}")
+
+    def _open_mac_stream(self, device_idx, buffer_list, lock):
+        """Open a sounddevice InputStream for macOS (no WASAPI settings)."""
+        stream = sd.InputStream(
+            device=device_idx,
+            channels=1,
+            samplerate=self.sample_rate,
+            dtype='int16',
+            callback=self._make_sd_callback(buffer_list, lock),
+        )
+        return stream
+
+    def _record_mac(self, source_name, duration, output_file):
+        try:
+            device_idx, _ = self._parse_mac_source(source_name)
+            chunks = []
+            lock = threading.Lock()
+
+            stream = self._open_mac_stream(device_idx, chunks, lock)
+            stream.start()
+
+            import time
+            time.sleep(duration)
+
+            stream.stop()
+            stream.close()
+
+            audio_data = b''.join(chunks)
+            with wave.open(output_file, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(audio_data)
+
+            return True
+        except Exception as e:
+            print(f"Recording error: {e}")
+            return False
+
+    def _record_stereo_mac(self, source1_name, source2_name, duration, output_file):
+        try:
+            idx1, _ = self._parse_mac_source(source1_name)
+            idx2, _ = self._parse_mac_source(source2_name)
+
+            buf1, buf2 = [], []
+            lock1, lock2 = threading.Lock(), threading.Lock()
+
+            stream1 = self._open_mac_stream(idx1, buf1, lock1)
+            stream2 = self._open_mac_stream(idx2, buf2, lock2)
+            stream1.start()
+            stream2.start()
+
+            import time
+            time.sleep(duration)
+
+            stream1.stop(); stream1.close()
+            stream2.stop(); stream2.close()
+
+            channel1 = np.frombuffer(b''.join(buf1), dtype=np.int16)
+            channel2 = np.frombuffer(b''.join(buf2), dtype=np.int16)
+
+            min_len = min(len(channel1), len(channel2))
+            stereo = np.empty((min_len * 2,), dtype=np.int16)
+            stereo[0::2] = channel1[:min_len]
+            stereo[1::2] = channel2[:min_len]
+
+            with wave.open(output_file, 'wb') as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(stereo.tobytes())
+
+            return True
+        except Exception as e:
+            print(f"Stereo recording error: {e}")
+            return False
+
+    def _start_mono_mac(self, source_name, output_file):
+        try:
+            device_idx, _ = self._parse_mac_source(source_name)
+
+            self._buffer1 = []
+            self._live_read_pos1 = 0
+            self._stream1 = self._open_mac_stream(device_idx, self._buffer1, self._buffer1_lock)
+            self._stream2 = None
+            self.process1 = None
+            self.process2 = None
+            self.output_file = output_file
+            self.recording_process = True
+            self._recording_mode = 'mono'
+            self._reader_threads = []
+
+            self._stream1.start()
+            print(f"Recording started (mono) -> {output_file}")
+            return True
+        except Exception as e:
+            print(f"Error starting recording: {e}")
+            return False
+
+    def _stop_mono_mac(self):
+        if self._stream1 is None:
+            print("No recording in progress")
+            return False
+
+        saved = False
+        try:
+            with self._buffer1_lock:
+                audio_data = b''.join(self._buffer1)
+
+            samples = np.frombuffer(audio_data, dtype=np.int16)
+            with wave.open(self.output_file, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(samples.tobytes())
+
+            saved = True
+            print("Recording stopped and saved")
+        except Exception as e:
+            print(f"Error saving recording: {e}")
+
+        self._safe_close_stream(self._stream1)
+        self._stream1 = None
+        self._stream2 = None
+        self.recording_process = None
+        self._recording_mode = None
+        self._buffer1 = []
+        return saved
+
+    def _start_stereo_mac(self, source1_name, source2_name, output_file):
+        try:
+            idx1, _ = self._parse_mac_source(source1_name)
+            idx2, _ = self._parse_mac_source(source2_name)
+
+            self._buffer1 = []
+            self._buffer2 = []
+            self._live_read_pos1 = 0
+            self._live_read_pos2 = 0
+
+            self._stream1 = self._open_mac_stream(idx1, self._buffer1, self._buffer1_lock)
+            self._stream2 = self._open_mac_stream(idx2, self._buffer2, self._buffer2_lock)
+            self.process1 = None
+            self.process2 = None
+            self.output_file = output_file
+            self.recording_process = True
+            self._recording_mode = 'stereo'
+            self._reader_threads = []
+
+            self._stream1.start()
+            self._stream2.start()
+            print(f"Recording started -> {output_file}")
+            return True
+        except Exception as e:
+            print(f"Error starting recording: {e}")
+            return False
+
+    def _stop_stereo_mac(self):
+        if self._stream1 is None:
+            print("No recording in progress")
+            return False
+
+        saved = False
+        try:
+            with self._buffer1_lock:
+                audio_data1 = b''.join(self._buffer1)
+            with self._buffer2_lock:
+                audio_data2 = b''.join(self._buffer2)
+
+            channel1 = np.frombuffer(audio_data1, dtype=np.int16)
+            channel2 = np.frombuffer(audio_data2, dtype=np.int16)
+
+            if len(channel1) == 0 and len(channel2) > 0:
+                channel1 = np.zeros(len(channel2), dtype=np.int16)
+            elif len(channel2) == 0 and len(channel1) > 0:
+                channel2 = np.zeros(len(channel1), dtype=np.int16)
+
+            min_len = min(len(channel1), len(channel2))
+            stereo = np.empty((min_len * 2,), dtype=np.int16)
+            stereo[0::2] = channel1[:min_len]
+            stereo[1::2] = channel2[:min_len]
+
+            with wave.open(self.output_file, 'wb') as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(stereo.tobytes())
+
+            saved = True
+            print("Recording stopped and saved")
+        except Exception as e:
+            print(f"Error saving recording: {e}")
+
+        self._safe_close_stream(self._stream1)
+        self._safe_close_stream(self._stream2)
+        self._stream1 = None
+        self._stream2 = None
+        self.recording_process = None
+        self._recording_mode = None
+        self._buffer1 = []
+        self._buffer2 = []
+        return saved
+
+    # ------------------------------------------------------------------ #
     #  Blocking recording (fixed duration)                                 #
     # ------------------------------------------------------------------ #
 
@@ -456,6 +711,8 @@ class AudioCapture:
         """Record audio from a source to WAV file (blocking)."""
         if PLATFORM == 'Windows':
             return self._record_windows(source_name, duration, output_file)
+        if PLATFORM == 'Darwin':
+            return self._record_mac(source_name, duration, output_file)
         return self._record_linux(source_name, duration, output_file)
 
     def _record_linux(self, source_name, duration, output_file):
@@ -532,6 +789,8 @@ class AudioCapture:
         """
         if PLATFORM == 'Windows':
             return self._record_stereo_windows(source1_name, source2_name, duration, output_file)
+        if PLATFORM == 'Darwin':
+            return self._record_stereo_mac(source1_name, source2_name, duration, output_file)
         return self._record_stereo_linux(source1_name, source2_name, duration, output_file)
 
     def _record_stereo_linux(self, source1_name, source2_name, duration, output_file):
@@ -682,6 +941,8 @@ class AudioCapture:
 
         if PLATFORM == 'Windows':
             return self._start_mono_windows(source_name, output_file)
+        if PLATFORM == 'Darwin':
+            return self._start_mono_mac(source_name, output_file)
         return self._start_mono_linux(source_name, output_file)
 
     def _start_mono_linux(self, source_name, output_file):
@@ -760,6 +1021,8 @@ class AudioCapture:
         """
         if PLATFORM == 'Windows':
             return self._stop_mono_windows()
+        if PLATFORM == 'Darwin':
+            return self._stop_mono_mac()
         return self._stop_mono_linux()
 
     def _stop_mono_linux(self):
@@ -860,6 +1123,8 @@ class AudioCapture:
 
         if PLATFORM == 'Windows':
             return self._start_stereo_windows(source1_name, source2_name, output_file)
+        if PLATFORM == 'Darwin':
+            return self._start_stereo_mac(source1_name, source2_name, output_file)
         return self._start_stereo_linux(source1_name, source2_name, output_file)
 
     def _start_stereo_linux(self, source1_name, source2_name, output_file):
@@ -1018,6 +1283,8 @@ class AudioCapture:
         """
         if PLATFORM == 'Windows':
             return self._stop_stereo_windows()
+        if PLATFORM == 'Darwin':
+            return self._stop_stereo_mac()
         return self._stop_stereo_linux()
 
     def _stop_stereo_linux(self):

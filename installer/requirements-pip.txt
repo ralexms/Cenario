@@ -1,7 +1,7 @@
 # Cenario pip requirements — PyTorch excluded (installed separately with correct CUDA index)
+# bitsandbytes is installed by the platform installer (not here) to allow per-platform error handling.
 faster-whisper==1.2.1
 transformers==4.45.2
-bitsandbytes==0.49.2
 accelerate==1.12.0
 sounddevice==0.5.5
 soundfile==0.13.1

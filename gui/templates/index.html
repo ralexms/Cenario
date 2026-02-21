@@ -213,6 +213,52 @@
         .tabcontent.active {
             display: block;
         }
+
+        /* System warning banner */
+        .sys-banner {
+            background: #fff3e0;
+            border: 1px solid #ff9800;
+            border-left: 5px solid #ff9800;
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .sys-banner-icon { font-size: 1.3em; flex-shrink: 0; margin-top: 1px; }
+        .sys-banner-body { flex: 1; }
+        .sys-banner-body p { font-size: 0.9em; color: #555; margin-bottom: 8px; line-height: 1.5; }
+        .sys-banner-body code {
+            background: #ffe0b2;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 0.85em;
+            color: #333;
+        }
+        .sys-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+        .sys-banner-actions a {
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-decoration: none;
+            background: #ff9800;
+            color: #fff;
+        }
+        .sys-banner-actions a:hover { background: #e65100; }
+        .sys-banner-dismiss {
+            background: none;
+            border: none;
+            font-size: 1.1em;
+            color: #999;
+            cursor: pointer;
+            padding: 0 4px;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+        .sys-banner-dismiss:hover { color: #555; }
     </style>
 </head>
 <body>
@@ -221,6 +267,9 @@
     <h1 style="margin:0;">Cenario</h1>
     <button class="btn-action" onclick="checkForUpdates()">Check for Updates</button>
 </div>
+
+<!-- System warnings (e.g. Mac missing BlackHole) -->
+<div id="systemWarningsBanner"></div>
 
 <!-- Meeting Setup -->
 <div class="card">
@@ -1485,12 +1534,44 @@
         toggleSummaryChunks();
     }
 
+    // ---- System warnings ----
+    async function checkSystemWarnings() {
+        try {
+            const res = await fetch('/api/system_warnings');
+            const warnings = await res.json();
+            const banner = document.getElementById('systemWarningsBanner');
+            banner.innerHTML = '';
+            warnings.forEach(w => {
+                const el = document.createElement('div');
+                el.className = 'sys-banner';
+                el.id = 'syswarn-' + w.id;
+                el.innerHTML = `
+                    <span class="sys-banner-icon">&#9888;</span>
+                    <div class="sys-banner-body">
+                        <p>${w.message}</p>
+                        ${w.brew ? `<p>Install with Homebrew: <code>${w.brew}</code></p>` : ''}
+                        <div class="sys-banner-actions">
+                            <a href="${w.link}" target="_blank" rel="noopener">${w.link_text}</a>
+                            <button class="btn-action" style="font-size:0.85em;padding:5px 12px;"
+                                onclick="checkSystemWarnings()">Check again</button>
+                        </div>
+                    </div>
+                    <button class="sys-banner-dismiss" title="Dismiss"
+                        onclick="document.getElementById('syswarn-${w.id}').remove()">&#10005;</button>`;
+                banner.appendChild(el);
+            });
+        } catch (e) {
+            // Non-critical — silently ignore if endpoint unreachable
+        }
+    }
+
     // ---- Init ----
     loadSources();
     loadFolders();
     checkPostStatus();
     initPersistence();
     updateLanguageForModel();
+    checkSystemWarnings();
 
     // Load persisted folder
     const savedFolder = localStorage.getItem('cenario_output_folder');

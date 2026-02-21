@@ -387,6 +387,8 @@ class Transcriber:
 
         if self.device == "cuda":
             diarization_pipeline.to(torch.device("cuda"))
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            diarization_pipeline.to(torch.device("mps"))
 
         # Build progress hook if callback provided
         hook = None

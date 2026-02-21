@@ -112,6 +112,33 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/system_warnings')
+def api_system_warnings():
+    """Return platform-specific setup warnings.
+
+    Currently: Mac without a loopback audio device (BlackHole / Soundflower).
+    Returns an empty list when everything is fine.
+    """
+    import platform
+    warnings = []
+    if platform.system() == 'Darwin':
+        sources = AudioCapture.get_sources_for_gui()
+        if not sources.get('monitors'):
+            warnings.append({
+                'id': 'mac_no_loopback',
+                'message': (
+                    'No system audio loopback device found. '
+                    'Without one, Cenario can only record your microphone — '
+                    'it cannot capture the meeting audio from your speakers. '
+                    'Install BlackHole 2ch to enable full meeting capture.'
+                ),
+                'link': 'https://github.com/ExistentialAudio/BlackHole',
+                'link_text': 'Get BlackHole (free)',
+                'brew': 'brew install blackhole-2ch',
+            })
+    return jsonify(warnings)
+
+
 @app.route('/api/sources')
 def api_sources():
     data = AudioCapture.get_sources_for_gui()

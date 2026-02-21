@@ -121,6 +121,10 @@ Info "Installing PyTorch ($TorchIndex)..."
 Info "Installing dependencies..."
 & $Pip install -r (Join-Path (Join-Path $RepoDir "installer") "requirements-pip.txt") --quiet
 
+# ---- Install bitsandbytes ----
+Info "Installing bitsandbytes..."
+& $Pip install bitsandbytes==0.49.2 --quiet
+
 # ---- Generate launcher scripts ----
 Info "Creating launcher scripts..."
 

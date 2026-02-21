@@ -135,6 +135,10 @@ fi
 info "Installing dependencies..."
 "$PIP" install -r "$REPO_DIR/installer/requirements-pip.txt" --quiet
 
+# ---- Install bitsandbytes ----
+info "Installing bitsandbytes..."
+"$PIP" install bitsandbytes==0.49.2 --quiet
+
 # ---- Generate launcher scripts ----
 info "Creating launcher scripts..."
 
