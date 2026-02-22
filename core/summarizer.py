@@ -24,6 +24,38 @@ class Summarizer:
     # Fallback budget when VRAM estimation isn't possible (CPU mode)
     _FALLBACK_CONTEXT_BUDGET = 16000
 
+    # Max output tokens per detail level (used for MAP phase and custom prompt path)
+    _MAX_NEW_TOKENS = {
+        "concise": 1024,
+        "detailed": 2048,
+        "comprehensive": 4096,
+    }
+
+    # Per-section output token limits for multi-section summarization
+    _SECTION_TOKENS = {
+        "concise":       {"summary": 768,  "action_points": 256},
+        "detailed":      {"summary": 1536, "action_points": 512},
+        "comprehensive": {"summary": 2048, "action_points": 512, "open_questions": 512, "qa": 1024},
+    }
+
+    # Ordered (section_key, markdown_heading) pairs per detail level
+    _SECTIONS = {
+        "concise": [
+            ("summary", None),
+            ("action_points", "## Action Points"),
+        ],
+        "detailed": [
+            ("summary", None),
+            ("action_points", "## Action Points"),
+        ],
+        "comprehensive": [
+            ("summary", None),
+            ("action_points", "## Action Points"),
+            ("open_questions", "## Open Questions"),
+            ("qa", "## Key Questions & Answers"),
+        ],
+    }
+
     def __init__(self, model_id="Qwen/Qwen2.5-0.5B-Instruct", device="cuda", quantization="4"):
         self.model_id = model_id
         self.device = device
@@ -89,7 +121,6 @@ class Summarizer:
             print("Summarization model loaded.")
         except Exception as e:
             print(f"Error loading model: {e}")
-            # Ensure cleanup on failure
             self.unload_model()
             raise
 
@@ -276,50 +307,6 @@ class Summarizer:
             "Do not reproduce transcription errors in your summary."
         )
 
-    def _build_user_prompt(self, text, detail_level, custom_prompt=None):
-        """Build the user prompt for a given detail level."""
-        if custom_prompt and custom_prompt.strip():
-            return f"Here is the meeting transcript:\n\n{text}\n\n{custom_prompt}"
-
-        if detail_level == "detailed":
-            return (
-                f"Here is the meeting transcript:\n\n{text}\n\n"
-                "Write a detailed summary of the discussion in flowing prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph. "
-                "Cover all key topics discussed, the arguments and positions taken by each side, "
-                "any problems or difficulties raised, and important context, "
-                "but skip any procedural details about how the meeting was conducted. "
-                "Write at least two or three substantial paragraphs.\n\n"
-                "## Action Points\n"
-                "After the summary, list every concrete task, decision, or follow-up as a bulleted list. "
-                "Include the assigned owner next to each item if mentioned."
-            )
-        elif detail_level == "comprehensive":
-            return (
-                f"Here is the meeting transcript:\n\n{text}\n\n"
-                "Write a comprehensive summary of the discussion in flowing prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph. "
-                "Cover all topics, the full context, key decisions and their rationale, nuances, "
-                "and any problems or difficulties raised. Be thorough and detailed, "
-                "but skip any procedural details about how the meeting was conducted.\n\n"
-                "## Action Points\n"
-                "List every concrete task, decision, or follow-up as a bulleted list, "
-                "with assigned owners if mentioned.\n\n"
-                "## Open Questions\n"
-                "List any unresolved issues or open questions as a bulleted list.\n\n"
-                "## Key Questions & Answers\n"
-                "List the key questions raised during the meeting and their proposed answers (if any) as a bulleted list."
-            )
-        else:  # concise
-            return (
-                f"Here is the meeting transcript:\n\n{text}\n\n"
-                "Write a concise summary of the discussion in a few prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph "
-                "covering the main topics and outcomes.\n\n"
-                "## Action Points\n"
-                "After the summary, list any tasks, decisions, or follow-ups as a bulleted list."
-            )
-
     def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
         """Run a single generation pass. Returns the generated text."""
         if self.stop_event.is_set():
@@ -391,49 +378,70 @@ class Summarizer:
         if self.device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def _build_reduce_prompt(self, combined_summaries, num_parts, detail_level, custom_prompt=None):
-        """Build the reduce-phase prompt that merges chunk summaries."""
-        base = (
-            f"Below are summaries of {num_parts} consecutive parts of a single meeting transcript. "
-            "Read all of them carefully, then write one unified summary that covers the entire meeting.\n\n"
-            f"{combined_summaries}\n\n"
-        )
+    # ---- Multi-section summarization ----
 
-        if custom_prompt and custom_prompt.strip():
-            return base + custom_prompt
+    def _build_section_prompt(self, content_prefix, section, detail_level):
+        """Build a focused single-task prompt for one output section."""
+        if section == "summary":
+            if detail_level == "concise":
+                instruction = (
+                    "Write a concise summary of this meeting in 2-3 prose paragraphs. "
+                    "Do not use bullet points or lists. Cover the main topics and outcomes."
+                )
+            elif detail_level == "detailed":
+                instruction = (
+                    "Write a detailed summary of this meeting in several prose paragraphs. "
+                    "Do not use bullet points or lists. Cover all key topics, arguments, "
+                    "decisions, problems raised, and important context."
+                )
+            else:  # comprehensive
+                instruction = (
+                    "Write a comprehensive summary of this meeting in several detailed prose paragraphs. "
+                    "Do not use bullet points or lists. Cover all topics, full context, "
+                    "key decisions and their rationale, and any difficulties raised."
+                )
+        elif section == "action_points":
+            instruction = (
+                "List every concrete task, decision, or follow-up from this meeting as a bulleted list. "
+                "Include the assigned owner next to each item if mentioned. "
+                "If there are none, write 'None identified.'"
+            )
+        elif section == "open_questions":
+            instruction = (
+                "List any unresolved issues or open questions from this meeting as a bulleted list. "
+                "If there are none, write 'None identified.'"
+            )
+        elif section == "qa":
+            instruction = (
+                "List the key questions raised during this meeting along with their answers as a bulleted list. "
+                "Format each item as: '- Q: [question] / A: [answer]'. "
+                "If there are none, write 'None identified.'"
+            )
+        else:
+            raise ValueError(f"Unknown section: {section}")
 
-        if detail_level == "detailed":
-            return (
-                base +
-                "Write a detailed summary of the full discussion in flowing prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph. "
-                "Cover all key topics, the arguments and positions taken, any problems or difficulties raised, "
-                "drawing from all parts of the meeting. Write at least two or three substantial paragraphs.\n\n"
-                "## Action Points\n"
-                "After the summary, list every concrete task, decision, or follow-up mentioned across all parts "
-                "as a bulleted list. Include the assigned owner next to each item if mentioned."
-            )
-        elif detail_level == "comprehensive":
-            return (
-                base +
-                "Write a comprehensive summary of the full discussion in flowing prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph. "
-                "Cover all topics, the full context, key decisions and their rationale, nuances, "
-                "and any problems or difficulties, drawing from all parts of the meeting. Be thorough.\n\n"
-                "## Action Points\n"
-                "List every concrete task, decision, or follow-up as a bulleted list, with assigned owners if mentioned.\n\n"
-                "## Open Questions\n"
-                "List any unresolved issues or open questions as a bulleted list."
-            )
-        else:  # concise
-            return (
-                base +
-                "Write a concise summary of the full discussion in a few prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph "
-                "covering the main topics and outcomes from the entire meeting.\n\n"
-                "## Action Points\n"
-                "After the summary, list any tasks, decisions, or follow-ups as a bulleted list."
-            )
+        return content_prefix + instruction
+
+    def _summarize_sections(self, content_prefix, detail_level, stream_callback):
+        """Run a separate focused generation pass for each output section and combine."""
+        system_prompt = self._get_system_prompt()
+        parts = []
+
+        for section, heading in self._SECTIONS[detail_level]:
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user")
+
+            max_tok = self._SECTION_TOKENS[detail_level][section]
+            prompt = self._build_section_prompt(content_prefix, section, detail_level)
+
+            if heading and stream_callback:
+                stream_callback(f"\n\n{heading}\n")
+
+            text = self._summarize_single(system_prompt, prompt, max_tok, stream_callback)
+            parts.append(f"{heading}\n{text.strip()}" if heading else text.strip())
+            self._free_kv_cache()
+
+        return "\n\n".join(parts)
 
     # ---- Chunked summarization (map-reduce) ----
 
@@ -457,7 +465,7 @@ class Summarizer:
              # To produce exactly num_chunks: chunk_size = (T + (N-1)*O) / N
              overlap = self._CHUNK_OVERLAP
              tokens_per_chunk = math.ceil((input_tokens + (num_chunks - 1) * overlap) / num_chunks)
-             
+
              # When user forces num_chunks, we respect it up to the model's hard limit,
              # ignoring the VRAM estimation which might be too conservative.
              config = self.pipe.model.config
@@ -488,9 +496,10 @@ class Summarizer:
 
         # If only 1 chunk, skip reduce phase
         if num_chunks == 1:
-            user_prompt = self._build_user_prompt(chunks[0], detail_level, custom_prompt=custom_prompt)
-            return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
-
+            content_prefix = f"Here is the meeting transcript:\n\n{chunks[0]}\n\n"
+            if custom_prompt:
+                return self._summarize_single(system_prompt, content_prefix + custom_prompt, max_new_tokens, stream_callback)
+            return self._summarize_sections(content_prefix, detail_level, stream_callback)
 
         # --- MAP phase: summarize each chunk ---
         chunk_summaries = []
@@ -527,32 +536,40 @@ class Summarizer:
         # Store chunk summaries for export
         self.chunk_summaries = list(chunk_summaries)
 
-        # --- REDUCE phase: combine chunk summaries into final summary ---
+        # --- REDUCE phase ---
         combined_summaries = "\n\n".join(
             f"## Summary of Part {i+1}\n{s}" for i, s in enumerate(chunk_summaries)
         )
 
-        # Build the full reduce prompt so we can check total token count
-        reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level, custom_prompt=custom_prompt)
+        reduce_prefix = (
+            f"Below are summaries of {num_chunks} consecutive parts of a single meeting transcript. "
+            f"Read all of them carefully.\n\n{combined_summaries}\n\n"
+        )
 
-        # Check FULL prompt tokens (system + user + template overhead) against budget
+        # Check if combined summaries fit within the context budget
         system_tokens = self.count_tokens(system_prompt)
-        total_input_tokens = system_tokens + self.count_tokens(reduce_prompt) + self._TEMPLATE_OVERHEAD
-        print(f"Reduce phase: total_input_tokens={total_input_tokens}, context_budget={context_budget}")
+        total_input_tokens = system_tokens + self.count_tokens(reduce_prefix) + self._TEMPLATE_OVERHEAD + 100
+        print(f"Reduce phase: total_input_tokens≈{total_input_tokens}, context_budget={context_budget}")
 
         if total_input_tokens > context_budget:
-            # Compute how many tokens the summaries can occupy
-            summaries_budget = context_budget - system_tokens - self._TEMPLATE_OVERHEAD - 200  # 200 for reduce instructions
+            # Compress summaries until they fit
+            summaries_budget = context_budget - system_tokens - self._TEMPLATE_OVERHEAD - 300
             combined_summaries = self._hierarchical_reduce(
                 chunk_summaries, system_prompt, max_new_tokens, summaries_budget, stream_callback
             )
-            reduce_prompt = self._build_reduce_prompt(combined_summaries, num_chunks, detail_level, custom_prompt=custom_prompt)
+            reduce_prefix = (
+                f"Below are summaries of {num_chunks} consecutive parts of a single meeting transcript. "
+                f"Read all of them carefully.\n\n{combined_summaries}\n\n"
+            )
 
         if stream_callback:
             stream_callback("\n\n--- Generating final summary ---\n\n")
 
         self._free_kv_cache()
-        return self._summarize_single(system_prompt, reduce_prompt, max_new_tokens, stream_callback)
+
+        if custom_prompt:
+            return self._summarize_single(system_prompt, reduce_prefix + custom_prompt, max_new_tokens, stream_callback)
+        return self._summarize_sections(reduce_prefix, detail_level, stream_callback)
 
     def _hierarchical_reduce(self, summaries, system_prompt, max_new_tokens, context_budget, stream_callback):
         """Reduce summaries in pairs when they exceed the context budget."""
@@ -595,13 +612,6 @@ class Summarizer:
 
     # ---- Main entry point ----
 
-    # Max output tokens per detail level
-    _MAX_NEW_TOKENS = {
-        "concise": 1024,
-        "detailed": 2048,
-        "comprehensive": 4096,
-    }
-
     def summarize(self, text, detail_level="concise", max_new_tokens=None, stream_callback=None, chunking="auto", num_chunks=None, custom_prompt=None):
         """
         Summarize the text.
@@ -624,7 +634,7 @@ class Summarizer:
 
             input_tokens = self.count_tokens(text)
             context_budget = self._get_context_budget(max_new_tokens)
-            
+
             if chunking == "never":
                 needs_chunking = False
             else:
@@ -644,14 +654,17 @@ class Summarizer:
             print(f"Summarize: {input_tokens} tokens, budget: {context_budget}, chunking: {chunking}, needs_chunking: {needs_chunking}")
 
             if needs_chunking:
-                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, num_chunks=num_chunks if chunking == "always" else None, custom_prompt=custom_prompt)
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback,
+                                              num_chunks=num_chunks if chunking == "always" else None,
+                                              custom_prompt=custom_prompt)
 
             # Single-pass summarization — with OOM fallback to chunked mode
             system_prompt = self._get_system_prompt()
-            user_prompt = self._build_user_prompt(text, detail_level, custom_prompt=custom_prompt)
-
+            content_prefix = f"Here is the meeting transcript:\n\n{text}\n\n"
             try:
-                return self._summarize_single(system_prompt, user_prompt, max_new_tokens, stream_callback)
+                if custom_prompt:
+                    return self._summarize_single(system_prompt, content_prefix + custom_prompt, max_new_tokens, stream_callback)
+                return self._summarize_sections(content_prefix, detail_level, stream_callback)
             except torch.cuda.OutOfMemoryError:
                 if chunking == "never":
                     print("Single-pass OOM — chunking disabled, re-raising error")
@@ -661,7 +674,8 @@ class Summarizer:
                 self._free_kv_cache()
                 if stream_callback:
                     stream_callback("\n\n[Single-pass ran out of GPU memory, retrying with chunked mode...]\n\n")
-                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback, custom_prompt=custom_prompt)
+                return self.summarize_chunked(text, detail_level, max_new_tokens, stream_callback,
+                                              custom_prompt=custom_prompt)
 
         except torch.cuda.OutOfMemoryError:
             print("CUDA Out of Memory Error caught in summarize()")
