@@ -98,39 +98,65 @@ def install_requirements():
     except Exception as e:
         print(f"Warning: dependency installation failed: {e}")
 
-def update():
-    print("Checking for updates...")
+def restart_application():
+    """Restart the application."""
+    print("Restarting application...")
+    python = sys.executable
+    script = os.path.join(APP_DIR, 'cenario.py')
+    
+    if sys.platform == 'win32':
+        # Windows restart
+        subprocess.Popen([python, script], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    else:
+        # Unix restart
+        os.execl(python, python, script)
+
+def check_for_updates():
+    """Check for updates and return metadata."""
     current = get_current_version()
     release = get_latest_release()
 
     if not release:
-        print("Could not determine latest version.")
-        return
+        return {'error': 'Could not check for updates'}
 
     latest = release['tag_name']
-    
     if latest == current:
-        print(f"You are already on the latest version ({current}).")
-        return
-
-    print(f"New version available: {latest} (current: {current})")
-    choice = input("Do you want to update? [y/N]: ").strip().lower()
-    if choice != 'y':
-        return
+        return {'update_available': False, 'current_version': current}
 
     # Try to find zipball url
     zip_url = release.get('zipball_url')
     if not zip_url:
-        # Fallback to source code zip
         zip_url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{latest}.zip"
 
-    if download_and_extract(zip_url):
+    return {
+        'update_available': True,
+        'current_version': current,
+        'latest_version': latest,
+        'release_notes': release.get('body', 'No release notes available.'),
+        'download_url': zip_url
+    }
+
+def perform_update(url, version):
+    """Download and install the update."""
+    if download_and_extract(url):
         install_requirements()
-        print("Update successful! Please restart the application.")
         with open(VERSION_FILE, 'w') as f:
-            f.write(latest)
-    else:
-        print("Update failed.")
+            f.write(version)
+        return True
+    return False
 
 if __name__ == "__main__":
-    update()
+    # CLI usage
+    res = check_for_updates()
+    if res.get('error'):
+        print(res['error'])
+    elif res['update_available']:
+        print(f"Update available: {res['latest_version']}")
+        if input("Update? [y/N] ").lower() == 'y':
+            if perform_update(res['download_url'], res['latest_version']):
+                print("Updated. Restarting...")
+                restart_application()
+            else:
+                print("Update failed.")
+    else:
+        print("Up to date.")

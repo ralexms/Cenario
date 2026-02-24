@@ -175,6 +175,11 @@ class Transcriber:
         self.compute_type = compute_type
         self.model = None
         self.current_model_size = None
+        self._stop_requested = False
+
+    def stop(self):
+        """Signal the transcriber to stop processing."""
+        self._stop_requested = True
 
     def load_model(self, model_size="small"):
         if self.current_model_size == model_size and self.model is not None:
@@ -229,6 +234,7 @@ class Transcriber:
     def transcribe(self, audio_file, model_size="small", language=None,
                    on_segment=None, beam_size=5, vad_filter=False):
         self.load_model(model_size)
+        self._stop_requested = False
 
         print(f"Transcribing {audio_file}...")
         kwargs = {'beam_size': beam_size, 'vad_filter': vad_filter}
@@ -242,6 +248,9 @@ class Transcriber:
         }
 
         for segment in segments:
+            if self._stop_requested:
+                print("Transcription stopped by user.")
+                break
             seg = {
                 'start': segment.start,
                 'end': segment.end,
@@ -263,6 +272,7 @@ class Transcriber:
         (with model reload between chunks to reset CTranslate2 memory pool),
         and merges results with deduplication.
         """
+        self._stop_requested = False
         chunks = _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds)
 
         # Short file — fall through to regular transcribe
@@ -278,6 +288,10 @@ class Transcriber:
 
         try:
             for idx, (chunk_file, chunk_start, chunk_end) in enumerate(chunks):
+                if self._stop_requested:
+                    print("Chunked transcription stopped by user.")
+                    break
+
                 print(f"Transcribing chunk {idx + 1}/{total_chunks} "
                       f"({chunk_start:.0f}s - {chunk_end:.0f}s)...")
 
@@ -312,6 +326,8 @@ class Transcriber:
                 def _chunk_cb(seg, _offset=chunk_start,
                               _first=_is_first_chunk,
                               _ov_end=_overlap_end):
+                    if self._stop_requested:
+                        return
                     adjusted = {
                         'start': seg['start'] + _offset,
                         'end': seg['end'] + _offset,
@@ -399,6 +415,8 @@ class Transcriber:
 
                 def _hook(step_name, step_artefact, file=None,
                           total=None, completed=None):
+                    if self._stop_requested:
+                        raise InterruptedError("Diarization stopped by user")
                     if completed is not None and total is not None and total > 0:
                         on_progress({
                             'type': 'diarize_progress',
@@ -448,6 +466,7 @@ class Transcriber:
         Returns:
             dict with transcription results
         """
+        self._stop_requested = False
         if stereo_mode == "joint":
             if hf_token:
                 return self.transcribe_with_diarization(
@@ -530,6 +549,11 @@ class Transcriber:
                                           on_segment=left_cb, beam_size=beam_size,
                                           vad_filter=vad_filter)
 
+        if self._stop_requested:
+            os.remove(temp_left)
+            os.remove(temp_right)
+            return {'left_channel': result_left, 'right_channel': {'segments': []}}
+
         if on_progress:
             on_progress({'type': 'status', 'status': 'transcribing',
                          'detail': 'right channel (microphone)'})
@@ -556,6 +580,11 @@ class Transcriber:
         if on_progress:
             on_progress({'type': 'transcription_done', 'result': result})
 
+        if self._stop_requested:
+            os.remove(temp_left)
+            os.remove(temp_right)
+            return result
+
         # Diarize if token provided — wrapped in try/except so transcription is not lost
         if hf_token:
             # Free Whisper model to make room for diarization on GPU
@@ -581,6 +610,10 @@ class Transcriber:
                                                      on_progress=diarize_cb)
                 self._assign_speakers(result_right, diarization_right,
                                       speaker_prefix="LOCAL_")
+            except InterruptedError:
+                print("Diarization stopped by user.")
+                if on_progress:
+                    on_progress({'type': 'warning', 'message': 'Diarization stopped by user.'})
             except Exception as e:
                 print(f"Diarization failed: {e}")
                 if on_progress:
@@ -667,6 +700,7 @@ class Transcriber:
         Returns:
             dict with transcription + speaker labels
         """
+        self._stop_requested = False
         if on_progress:
             on_progress({'type': 'status', 'status': 'transcribing'})
 
@@ -690,6 +724,9 @@ class Transcriber:
         if on_progress:
             on_progress({'type': 'transcription_done', 'result': transcription})
 
+        if self._stop_requested:
+            return transcription
+
         # Free Whisper model to make room for diarization on GPU
         self.unload_model()
 
@@ -707,6 +744,10 @@ class Transcriber:
                                            on_progress=diarize_cb)
             self._assign_speakers(transcription, diarization)
             print("Finished!")
+        except InterruptedError:
+            print("Diarization stopped by user.")
+            if on_progress:
+                on_progress({'type': 'warning', 'message': 'Diarization stopped by user.'})
         except Exception as e:
             print(f"Diarization failed: {e}")
             if on_progress:

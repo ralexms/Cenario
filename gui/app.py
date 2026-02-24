@@ -26,6 +26,7 @@ from core.audio_capture import AudioCapture
 from core.transcriber import Transcriber
 from core.exporter import Exporter
 from core.summarizer import Summarizer
+import updater  # Import the updater module
 
 app = Flask(__name__)
 
@@ -51,6 +52,7 @@ _post = {
     'file': None,
     'error': None,
     'duration': 0,  # audio duration in seconds
+    'transcriber_instance': None # Keep track of the transcriber instance to stop it
 }
 
 # --- Summarization state ---
@@ -92,6 +94,7 @@ def _reset_post_state():
     _post['result'] = None
     _post['error'] = None
     _post['duration'] = 0
+    _post['transcriber_instance'] = None
 
 def _reset_summary_state():
     """Reset summarization state for a new run."""
@@ -210,6 +213,42 @@ def api_browse_folder():
         return jsonify({'path': folder_path})
     except Exception as e:
         print(f"Error opening folder dialog: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/browse_file')
+def api_browse_file():
+    """Open a file selection dialog on the server (local machine)."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        file_type = request.args.get('type', 'audio')
+        
+        root = tk.Tk()
+        root.withdraw() # Hide the main window
+        root.attributes('-topmost', True) # Bring dialog to front
+        
+        if file_type == 'audio':
+            filetypes = [("Audio Files", "*.wav *.mp3 *.m4a *.flac *.ogg"), ("All Files", "*.*")]
+            title = "Select Audio File"
+        else:
+            filetypes = [("Transcription Files", "*.json *.txt *.srt"), ("All Files", "*.*")]
+            title = "Select Transcription File"
+
+        file_path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        root.destroy()
+        
+        if not file_path:
+            return jsonify({'path': ''})
+
+        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        return jsonify({
+            'path': file_path,
+            'name': os.path.basename(file_path),
+            'size_mb': round(size_mb, 1)
+        })
+    except Exception as e:
+        print(f"Error opening file dialog: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/record/start', methods=['POST'])
@@ -450,7 +489,12 @@ def api_postprocess_start():
             duration = wf.getnframes() / wf.getframerate()
         _post['duration'] = duration
     except Exception as e:
-        return jsonify({'error': f'Cannot read WAV file: {e}'}), 400
+        # Try to get duration for non-wav files if possible, or just default to 0
+        # For now, just log error and proceed (progress bar might be broken)
+        print(f"Warning: Cannot read WAV duration: {e}")
+        channels = 1 # Default assumption
+        duration = 0
+        _post['duration'] = 0
 
     def _emit(event):
         _post['events'].append(event)
@@ -458,6 +502,7 @@ def api_postprocess_start():
     def run():
         try:
             transcriber = Transcriber(compute_type=compute_type)
+            _post['transcriber_instance'] = transcriber
 
             def on_progress(event):
                 evt_type = event.get('type')
@@ -537,6 +582,8 @@ def api_postprocess_start():
             _post['status'] = 'error'
             _post['error'] = str(e)
             _emit({'type': 'error', 'message': str(e)})
+        finally:
+            _post['transcriber_instance'] = None
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
@@ -544,6 +591,17 @@ def api_postprocess_start():
 
     return jsonify({'status': 'started', 'file': file_path,
                     'duration': duration, 'channels': channels})
+
+@app.route('/api/postprocess/stop', methods=['POST'])
+def api_postprocess_stop():
+    if _post['status'] not in ('transcribing', 'diarizing'):
+        return jsonify({'error': 'No post-processing in progress'}), 400
+
+    if _post['transcriber_instance']:
+        _post['transcriber_instance'].stop()
+        return jsonify({'status': 'stopping'})
+    else:
+        return jsonify({'error': 'Transcriber instance not found'}), 500
 
 
 @app.route('/api/postprocess/stream')
@@ -599,6 +657,14 @@ def api_export():
 
     if not file_path:
         return jsonify({'error': 'No file specified'}), 400
+    
+    # Allow export if we have a result, even if status is error (aborted)
+    if not _post['result'] and not _summary['result']:
+         # Try to load from file if not in memory? 
+         # For now, just check memory. If aborted, result might be partial or None.
+         # If partial result was saved to _post['result'], we can export it.
+         pass
+
     if not _post['result']:
         return jsonify({'error': 'No transcription result available. Run post-processing first.'}), 400
 
@@ -915,39 +981,6 @@ def api_summarize_stop():
     else:
         return jsonify({'error': 'Summarizer instance not found'}), 500
 
-@app.route('/api/summarize/stream')
-def api_summarize_stream():
-    """SSE stream for summarization text generation."""
-    def generate():
-        pos = 0
-        while True:
-            with _summary['stream_lock']:
-                new_items = _summary['stream_queue'][pos:]
-                pos = len(_summary['stream_queue'])
-            
-            for item in new_items:
-                yield f"data: {json.dumps({'text': item})}\n\n"
-
-            if _summary['status'] in ('done', 'error'):
-                # Drain remaining
-                with _summary['stream_lock']:
-                    remaining = _summary['stream_queue'][pos:]
-                for item in remaining:
-                    yield f"data: {json.dumps({'text': item})}\n\n"
-                
-                if _summary['status'] == 'done':
-                    yield f"data: {json.dumps({'done': True, 'result': _summary['result']})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'error': _summary['error']})}\n\n"
-                break
-
-            import time
-            time.sleep(0.1)
-            yield ": keepalive\n\n"
-
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
 @app.route('/api/summarize/export_markdown', methods=['POST'])
 def api_summarize_export_markdown():
     body = request.get_json(force=True)
@@ -956,6 +989,8 @@ def api_summarize_export_markdown():
 
     if not text:
         return jsonify({'error': 'No text to export'}), 400
+    
+    # Allow export even if aborted (text might be partial)
 
     if file_path:
         if file_path.endswith('_transcription.json'):
@@ -991,15 +1026,37 @@ def api_summarize_export_markdown():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/update', methods=['POST'])
-def api_update():
-    """Trigger the updater script."""
+@app.route('/api/update/check', methods=['GET'])
+def api_update_check():
+    """Check for updates and return metadata."""
     try:
-        import subprocess
-        # Run updater.py in a separate process
-        updater_path = os.path.join(BASE_DIR, 'updater.py')
-        subprocess.Popen([sys.executable, updater_path], cwd=BASE_DIR)
-        return jsonify({'status': 'started'})
+        res = updater.check_for_updates()
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/update/perform', methods=['POST'])
+def api_update_perform():
+    """Perform the update."""
+    try:
+        body = request.get_json(force=True)
+        url = body.get('url')
+        version = body.get('version')
+        
+        if not url or not version:
+            return jsonify({'error': 'Missing url or version'}), 400
+            
+        success = updater.perform_update(url, version)
+        if success:
+            # Trigger restart in a separate thread to allow response to return
+            def _restart():
+                import time
+                time.sleep(1)
+                updater.restart_application()
+            threading.Thread(target=_restart, daemon=True).start()
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'error': 'Update failed'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

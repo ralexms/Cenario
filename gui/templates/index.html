@@ -6,34 +6,244 @@
     <title>Cenario — Meeting Transcription</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg-color: #f4f7f6;
+            --text-color: #333;
+            --card-bg: #ffffff;
+            --card-border: #e0e0e0;
+            --primary-color: #005b96;
+            --primary-text: #fff;
+            --secondary-bg: #f8f9fa;
+            --input-bg: #fff;
+            --input-border: #ccc;
+            --success-color: #4caf50;
+            --error-color: #d32f2f;
+            --warning-color: #ff9800;
+            --info-color: #666;
+            --tab-bg: #f1f1f1;
+            --tab-hover: #ddd;
+            --tab-active-bg: #005b96;
+            --tab-active-text: #fff;
+        }
+
+        /* Dark Theme */
+        [data-theme="dark"] {
+            --bg-color: #1e1e1e;
+            --text-color: #e0e0e0;
+            --card-bg: #2d2d2d;
+            --card-border: #444;
+            --primary-color: #4da3ff;
+            --primary-text: #fff;
+            --secondary-bg: #333;
+            --input-bg: #3d3d3d;
+            --input-border: #555;
+            --success-color: #66bb6a;
+            --error-color: #ef5350;
+            --warning-color: #ffa726;
+            --info-color: #aaa;
+            --tab-bg: #333;
+            --tab-hover: #444;
+            --tab-active-bg: #4da3ff;
+            --tab-active-text: #fff;
+        }
+
+        /* High Contrast Theme */
+        [data-theme="high-contrast"] {
+            --bg-color: #fff;
+            --text-color: #000;
+            --card-bg: #fff;
+            --card-border: #000;
+            --primary-color: #000080;
+            --primary-text: #fff;
+            --secondary-bg: #eee;
+            --input-bg: #fff;
+            --input-border: #000;
+            --success-color: #006400;
+            --error-color: #b00000;
+            --warning-color: #b8860b;
+            --info-color: #000;
+            --tab-bg: #ddd;
+            --tab-hover: #bbb;
+            --tab-active-bg: #000080;
+            --tab-active-text: #fff;
+        }
+
+        /* Solarized Light */
+        [data-theme="solarized-light"] {
+            --bg-color: #fdf6e3;
+            --text-color: #657b83;
+            --card-bg: #eee8d5;
+            --card-border: #93a1a1;
+            --primary-color: #268bd2;
+            --primary-text: #fff;
+            --secondary-bg: #fdf6e3;
+            --input-bg: #fff;
+            --input-border: #93a1a1;
+            --success-color: #859900;
+            --error-color: #dc322f;
+            --warning-color: #b58900;
+            --info-color: #586e75;
+            --tab-bg: #eee8d5;
+            --tab-hover: #d3cbb7;
+            --tab-active-bg: #268bd2;
+            --tab-active-text: #fff;
+        }
+
+        /* Solarized Dark */
+        [data-theme="solarized-dark"] {
+            --bg-color: #002b36;
+            --text-color: #839496;
+            --card-bg: #073642;
+            --card-border: #586e75;
+            --primary-color: #268bd2;
+            --primary-text: #fff;
+            --secondary-bg: #002b36;
+            --input-bg: #073642;
+            --input-border: #586e75;
+            --success-color: #859900;
+            --error-color: #dc322f;
+            --warning-color: #b58900;
+            --info-color: #93a1a1;
+            --tab-bg: #073642;
+            --tab-hover: #004052;
+            --tab-active-bg: #268bd2;
+            --tab-active-text: #fff;
+        }
+
+        /* Dracula */
+        [data-theme="dracula"] {
+            --bg-color: #282a36;
+            --text-color: #f8f8f2;
+            --card-bg: #44475a;
+            --card-border: #6272a4;
+            --primary-color: #bd93f9;
+            --primary-text: #282a36;
+            --secondary-bg: #282a36;
+            --input-bg: #44475a;
+            --input-border: #6272a4;
+            --success-color: #50fa7b;
+            --error-color: #ff5555;
+            --warning-color: #ffb86c;
+            --info-color: #8be9fd;
+            --tab-bg: #44475a;
+            --tab-hover: #6272a4;
+            --tab-active-bg: #bd93f9;
+            --tab-active-text: #282a36;
+        }
+
+        /* Nord */
+        [data-theme="nord"] {
+            --bg-color: #2e3440;
+            --text-color: #d8dee9;
+            --card-bg: #3b4252;
+            --card-border: #4c566a;
+            --primary-color: #88c0d0;
+            --primary-text: #2e3440;
+            --secondary-bg: #2e3440;
+            --input-bg: #3b4252;
+            --input-border: #4c566a;
+            --success-color: #a3be8c;
+            --error-color: #bf616a;
+            --warning-color: #ebcb8b;
+            --info-color: #81a1c1;
+            --tab-bg: #3b4252;
+            --tab-hover: #434c5e;
+            --tab-active-bg: #88c0d0;
+            --tab-active-text: #2e3440;
+        }
+
+        /* Monokai */
+        [data-theme="monokai"] {
+            --bg-color: #272822;
+            --text-color: #f8f8f2;
+            --card-bg: #3e3d32;
+            --card-border: #75715e;
+            --primary-color: #66d9ef;
+            --primary-text: #272822;
+            --secondary-bg: #272822;
+            --input-bg: #3e3d32;
+            --input-border: #75715e;
+            --success-color: #a6e22e;
+            --error-color: #f92672;
+            --warning-color: #fd971f;
+            --info-color: #ae81ff;
+            --tab-bg: #3e3d32;
+            --tab-hover: #49483e;
+            --tab-active-bg: #66d9ef;
+            --tab-active-text: #272822;
+        }
+
+        /* Gruvbox Light */
+        [data-theme="gruvbox-light"] {
+            --bg-color: #fbf1c7;
+            --text-color: #3c3836;
+            --card-bg: #ebdbb2;
+            --card-border: #d5c4a1;
+            --primary-color: #076678;
+            --primary-text: #fbf1c7;
+            --secondary-bg: #f9f5d7;
+            --input-bg: #fbf1c7;
+            --input-border: #d5c4a1;
+            --success-color: #79740e;
+            --error-color: #9d0006;
+            --warning-color: #b57614;
+            --info-color: #458588;
+            --tab-bg: #ebdbb2;
+            --tab-hover: #d5c4a1;
+            --tab-active-bg: #076678;
+            --tab-active-text: #fbf1c7;
+        }
+
+        /* Gruvbox Dark */
+        [data-theme="gruvbox-dark"] {
+            --bg-color: #282828;
+            --text-color: #ebdbb2;
+            --card-bg: #3c3836;
+            --card-border: #504945;
+            --primary-color: #83a598;
+            --primary-text: #282828;
+            --secondary-bg: #282828;
+            --input-bg: #3c3836;
+            --input-border: #504945;
+            --success-color: #b8bb26;
+            --error-color: #fb4934;
+            --warning-color: #fabd2f;
+            --info-color: #83a598;
+            --tab-bg: #3c3836;
+            --tab-hover: #504945;
+            --tab-active-bg: #83a598;
+            --tab-active-text: #282828;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f4f7f6;
-            color: #333;
+            background: var(--bg-color);
+            color: var(--text-color);
             padding: 20px;
             max-width: 960px;
             margin: 0 auto;
+            padding-bottom: 60px; /* Space for theme selector */
         }
-        h1 { color: #005b96; margin-bottom: 20px; }
-        h2 { color: #fff; background: #005b96; padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 1em; }
+        h1 { color: var(--primary-color); margin-bottom: 20px; }
+        h2 { color: var(--primary-text); background: var(--primary-color); padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 1em; }
 
         .card {
-            background: #ffffff;
+            background: var(--card-bg);
             border-radius: 6px;
             margin-bottom: 16px;
-            border: 1px solid #e0e0e0;
+            border: 1px solid var(--card-border);
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         .card-body { padding: 14px; }
 
-        label { display: block; margin-bottom: 4px; font-size: 0.9em; color: #666; }
+        label { display: block; margin-bottom: 4px; font-size: 0.9em; color: var(--info-color); }
         select, input[type="number"], input[type="text"], textarea {
             width: 100%;
             padding: 8px;
             border-radius: 4px;
-            border: 1px solid #ccc;
-            background: #fff;
-            color: #333;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text-color);
             margin-bottom: 10px;
         }
         textarea {
@@ -45,7 +255,7 @@
         .row > div { flex: 1; }
 
         .radio-group { display: flex; gap: 16px; margin-bottom: 12px; }
-        .radio-group label { display: inline; color: #333; cursor: pointer; }
+        .radio-group label { display: inline; color: var(--text-color); cursor: pointer; }
 
         button {
             padding: 10px 20px;
@@ -55,17 +265,17 @@
             font-size: 0.95em;
             font-weight: 600;
         }
-        .btn-start { background: #4caf50; color: #fff; }
-        .btn-stop { background: #d32f2f; color: #fff; }
-        .btn-action { background: #005b96; color: #fff; }
-        .btn-warn { background: #ff9800; color: #fff; }
+        .btn-start { background: var(--success-color); color: #fff; }
+        .btn-stop { background: var(--error-color); color: #fff; }
+        .btn-action { background: var(--primary-color); color: #fff; }
+        .btn-warn { background: var(--warning-color); color: #fff; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
         .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
         .output-area {
-            background: #f8f9fa;
-            border: 1px solid #ccc;
+            background: var(--secondary-bg);
+            border: 1px solid var(--input-border);
             border-radius: 4px;
             padding: 10px;
             height: 220px;
@@ -74,14 +284,14 @@
             font-size: 0.85em;
             line-height: 1.6;
             white-space: pre-wrap;
-            color: #333;
+            color: var(--text-color);
         }
 
         .segment { margin-bottom: 4px; }
-        .segment .time { color: #005b96; font-weight: bold; }
-        .segment .speaker { color: #2e7d32; font-weight: bold; }
-        .segment .text { color: #333; }
-        .segment .channel { color: #ef6c00; font-size: 0.8em; }
+        .segment .time { color: var(--primary-color); font-weight: bold; }
+        .segment .speaker { color: var(--success-color); font-weight: bold; }
+        .segment .text { color: var(--text-color); }
+        .segment .channel { color: var(--warning-color); font-size: 0.8em; }
 
         .status {
             padding: 6px 12px;
@@ -89,37 +299,37 @@
             font-size: 0.85em;
             display: inline-block;
         }
-        .status.recording { background: #4caf50; color: #fff; animation: pulse 1.5s infinite; }
+        .status.recording { background: var(--success-color); color: #fff; animation: pulse 1.5s infinite; }
         .status.idle { background: #999; color: #fff; }
-        .status.processing { background: #ff9800; color: #fff; animation: pulse 2s infinite; }
+        .status.processing { background: var(--warning-color); color: #fff; animation: pulse 2s infinite; }
 
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
         .progress-bar {
             width: 100%;
             height: 6px;
-            background: #e0e0e0;
+            background: var(--card-border);
             border-radius: 3px;
             margin: 8px 0;
             overflow: hidden;
         }
         .progress-bar .fill {
             height: 100%;
-            background: #4caf50;
+            background: var(--success-color);
             border-radius: 3px;
             transition: width 0.5s ease;
             width: 0;
         }
 
         .checkbox-group { display: flex; gap: 16px; margin-bottom: 10px; }
-        .checkbox-group label { color: #333; cursor: pointer; display: inline; }
+        .checkbox-group label { color: var(--text-color); cursor: pointer; display: inline; }
 
         .hidden { display: none; }
 
-        .warning { color: #ef6c00; margin: 6px 0; font-size: 0.9em; }
-        .error { color: #d32f2f; margin: 6px 0; font-size: 0.9em; }
-        .success { color: #2e7d32; margin: 6px 0; font-size: 0.9em; }
-        .info { color: #666; margin: 6px 0; font-size: 0.9em; }
+        .warning { color: var(--warning-color); margin: 6px 0; font-size: 0.9em; }
+        .error { color: var(--error-color); margin: 6px 0; font-size: 0.9em; }
+        .success { color: var(--success-color); margin: 6px 0; font-size: 0.9em; }
+        .info { color: var(--info-color); margin: 6px 0; font-size: 0.9em; }
 
         /* Tooltip container */
         .tooltip {
@@ -170,8 +380,8 @@
         /* Tabs */
         .tab {
             overflow: hidden;
-            border: 1px solid #ccc;
-            background-color: #f1f1f1;
+            border: 1px solid var(--card-border);
+            background-color: var(--tab-bg);
             border-radius: 6px 6px 0 0;
             margin-bottom: -1px;
         }
@@ -184,27 +394,27 @@
             cursor: pointer;
             padding: 14px 16px;
             transition: 0.3s;
-            color: #666;
+            color: var(--info-color);
             border-radius: 0;
             margin: 0;
         }
 
         .tab button:hover {
-            background-color: #ddd;
-            color: #000;
+            background-color: var(--tab-hover);
+            color: var(--text-color);
         }
 
         .tab button.active {
-            background-color: #005b96;
-            color: white;
+            background-color: var(--tab-active-bg);
+            color: var(--tab-active-text);
         }
 
         .tabcontent {
             display: none;
             padding: 6px 12px;
-            border: 1px solid #ccc;
+            border: 1px solid var(--card-border);
             border-top: none;
-            background: #ffffff;
+            background: var(--card-bg);
             border-radius: 0 0 6px 6px;
             margin-bottom: 16px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
@@ -259,6 +469,31 @@
             line-height: 1;
         }
         .sys-banner-dismiss:hover { color: #555; }
+
+        /* Theme Selector */
+        .theme-selector {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 8px;
+            border-radius: 6px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .theme-selector select {
+            margin-bottom: 0;
+            padding: 4px;
+            width: auto;
+        }
+        .theme-selector label {
+            margin-bottom: 0;
+            font-size: 0.85em;
+        }
     </style>
 </head>
 <body>
@@ -271,10 +506,17 @@
 <!-- System warnings (e.g. Mac missing BlackHole) -->
 <div id="systemWarningsBanner"></div>
 
-<!-- Meeting Setup -->
-<div class="card">
-    <h2>Meeting Setup</h2>
+<!-- Tabs -->
+<div class="tab">
+  <button class="tablinks active" onclick="openTab(event, 'Recording')">Recording</button>
+  <button class="tablinks" onclick="openTab(event, 'PostProcessing')">Post-Processing</button>
+  <button class="tablinks" onclick="openTab(event, 'Summarization')">Summarization</button>
+</div>
+
+<!-- Recording Tab -->
+<div id="Recording" class="tabcontent active">
     <div class="card-body">
+        <h3>Meeting Setup</h3>
         <div class="row">
             <div>
                 <label for="meetingName">Meeting Name (optional)</label>
@@ -284,7 +526,7 @@
                 <label for="outputFolder">Output Folder</label>
                 <div style="display:flex; gap:8px;">
                     <input type="text" id="outputFolder" value="recordings" placeholder="recordings" readonly style="flex-grow:1;">
-                    <button class="btn-action" onclick="browseFolder()">Browse</button>
+                    <button class="btn-action" onclick="browseFolder('outputFolder')">Browse</button>
                 </div>
             </div>
         </div>
@@ -308,19 +550,7 @@
                 </select>
             </div>
         </div>
-    </div>
-</div>
 
-<!-- Tabs -->
-<div class="tab">
-  <button class="tablinks active" onclick="openTab(event, 'Recording')">Recording</button>
-  <button class="tablinks" onclick="openTab(event, 'PostProcessing')">Post-Processing</button>
-  <button class="tablinks" onclick="openTab(event, 'Summarization')">Summarization</button>
-</div>
-
-<!-- Recording Tab -->
-<div id="Recording" class="tabcontent active">
-    <div class="card-body">
         <div class="row">
             <div>
                 <div class="radio-group" style="margin-bottom: 12px;">
@@ -392,12 +622,24 @@
     <div class="card-body">
         <div class="row" style="margin-bottom:12px;">
             <div>
+                <label for="postOutputFolder">Output Folder</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="postOutputFolder" value="recordings" placeholder="recordings" readonly style="flex-grow:1;">
+                    <button class="btn-action" onclick="browseFolder('postOutputFolder')">Browse</button>
+                </div>
+            </div>
+            <div>
                 <label for="postFolder">Select Meeting Folder</label>
                 <select id="postFolder" onchange="loadFilesForFolder()"><option value="">Loading...</option></select>
             </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="postFile">Audio File</label>
-                <select id="postFile"><option value="">Select a folder first</option></select>
+                <div style="display:flex; gap:8px;">
+                    <select id="postFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
+                    <button class="btn-action" onclick="browseFile('postFile', 'audio')">Browse</button>
+                </div>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
@@ -464,6 +706,7 @@
         </div>
         <div class="controls" style="margin-bottom:8px;">
             <button id="btnPostStart" class="btn-action" onclick="startPostProcess()">Start Post-Processing</button>
+            <button id="btnPostStop" class="btn-stop" onclick="stopPostProcess()" disabled>Stop</button>
             <span id="postStatusBadge" class="status idle">Idle</span>
             <span id="postStatusText" class="info"></span>
         </div>
@@ -507,12 +750,24 @@
     <div class="card-body">
         <div class="row" style="margin-bottom:12px;">
             <div>
+                <label for="summaryOutputFolder">Output Folder</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="summaryOutputFolder" value="recordings" placeholder="recordings" readonly style="flex-grow:1;">
+                    <button class="btn-action" onclick="browseFolder('summaryOutputFolder')">Browse</button>
+                </div>
+            </div>
+            <div>
                 <label for="summaryFolder">Select Meeting Folder</label>
                 <select id="summaryFolder" onchange="loadTranscriptionsForSummary()"><option value="">Loading...</option></select>
             </div>
+        </div>
+        <div class="row" style="margin-bottom:12px;">
             <div>
                 <label for="summaryFile">Transcription File</label>
-                <select id="summaryFile"><option value="">Select a folder first</option></select>
+                <div style="display:flex; gap:8px;">
+                    <select id="summaryFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
+                    <button class="btn-action" onclick="browseFile('summaryFile', 'transcription')">Browse</button>
+                </div>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
@@ -594,12 +849,35 @@
     </div>
 </div>
 
+<!-- Theme Selector -->
+<div class="theme-selector">
+    <label for="themeSelect">Theme:</label>
+    <select id="themeSelect" onchange="changeTheme(this.value)">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="high-contrast">High Contrast</option>
+        <option value="solarized-light">Solarized Light</option>
+        <option value="solarized-dark">Solarized Dark</option>
+        <option value="dracula">Dracula</option>
+        <option value="nord">Nord</option>
+        <option value="monokai">Monokai</option>
+        <option value="gruvbox-light">Gruvbox Light</option>
+        <option value="gruvbox-dark">Gruvbox Dark</option>
+    </select>
+</div>
+
 <script>
     let currentFile = null;
     let liveEventSource = null;
     let postEventSource = null;
     let summaryEventSource = null;
     let postDuration = 0;
+
+    // ---- Theme ----
+    function changeTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('cenario_theme', theme);
+    }
 
     // ---- Tabs ----
     function openTab(evt, tabName) {
@@ -689,14 +967,48 @@
     }
 
     // ---- Browse Folder ----
-    function browseFolder() {
+    function browseFolder(targetId) {
         fetch('/api/browse_folder')
             .then(response => response.json())
             .then(data => {
                 if (data.path) {
-                    document.getElementById('outputFolder').value = data.path;
-                    localStorage.setItem('cenario_output_folder', data.path);
-                    loadFolders();
+                    document.getElementById(targetId).value = data.path;
+                    localStorage.setItem('cenario_' + targetId, data.path);
+                    if (targetId === 'outputFolder' || targetId === 'postOutputFolder' || targetId === 'summaryOutputFolder') {
+                        loadFolders(targetId);
+                    }
+                }
+            })
+            .catch(err => console.error(err));
+    }
+
+    // ---- Browse File ----
+    function browseFile(targetId, type) {
+        fetch('/api/browse_file?type=' + type)
+            .then(response => response.json())
+            .then(data => {
+                if (data.path) {
+                    const sel = document.getElementById(targetId);
+                    // Check if option exists
+                    let exists = false;
+                    for (let i = 0; i < sel.options.length; i++) {
+                        if (sel.options[i].value === data.path) {
+                            sel.selectedIndex = i;
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        const opt = document.createElement('option');
+                        opt.value = data.path;
+                        opt.textContent = data.name + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '');
+                        sel.appendChild(opt);
+                        sel.value = data.path;
+                    }
+
+                    if (targetId === 'postFile') {
+                        currentFile = data.path;
+                    }
                 }
             })
             .catch(err => console.error(err));
@@ -749,28 +1061,69 @@
         }
     }
 
-    async function loadFolders() {
+    async function loadFolders(sourceId = 'outputFolder') {
         try {
-            const outputFolder = document.getElementById('outputFolder').value || 'recordings';
+            let outputFolder = 'recordings';
+            if (sourceId) {
+                outputFolder = document.getElementById(sourceId).value || 'recordings';
+            }
+
             const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
             const folders = await resp.json();
 
-            const postSel = document.getElementById('postFolder');
-            const sumSel = document.getElementById('summaryFolder');
+            let targetSel;
+            if (sourceId === 'postOutputFolder') {
+                targetSel = document.getElementById('postFolder');
+            } else if (sourceId === 'summaryOutputFolder') {
+                targetSel = document.getElementById('summaryFolder');
+            } else {
+                // Default behavior (legacy or recording tab) - update both if they use default
+                // But now we have separate inputs, so we should probably update based on which tab we are in or update all?
+                // For simplicity, let's update the dropdowns corresponding to the input
+                // If called from loadFolders() without args, we might need to check all inputs
+                return;
+            }
 
             const html = '<option value="">Select a folder...</option>';
-            postSel.innerHTML = html;
-            sumSel.innerHTML = html;
+            targetSel.innerHTML = html;
 
             folders.forEach(f => {
                 const opt = document.createElement('option');
                 opt.value = f.path;
                 opt.textContent = f.name;
-                postSel.appendChild(opt);
-                sumSel.appendChild(opt.cloneNode(true));
+                targetSel.appendChild(opt);
             });
         } catch (e) {
             console.error('Failed to load folders:', e);
+        }
+    }
+
+    // Wrapper to load all folders on init
+    async function loadAllFolders() {
+        const inputs = ['outputFolder', 'postOutputFolder', 'summaryOutputFolder'];
+        for (const id of inputs) {
+             try {
+                const outputFolder = document.getElementById(id).value || 'recordings';
+                const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
+                const folders = await resp.json();
+
+                let targetSel = null;
+                if (id === 'postOutputFolder') targetSel = document.getElementById('postFolder');
+                if (id === 'summaryOutputFolder') targetSel = document.getElementById('summaryFolder');
+
+                if (targetSel) {
+                    const html = '<option value="">Select a folder...</option>';
+                    targetSel.innerHTML = html;
+                    folders.forEach(f => {
+                        const opt = document.createElement('option');
+                        opt.value = f.path;
+                        opt.textContent = f.name;
+                        targetSel.appendChild(opt);
+                    });
+                }
+             } catch (e) {
+                 console.error(`Failed to load folders for ${id}:`, e);
+             }
         }
     }
 
@@ -929,7 +1282,7 @@
                 currentFile = null;
             } else {
                 currentFile = data.file;
-                loadFolders(); // Refresh folders list
+                loadAllFolders(); // Refresh folders list
             }
 
         } catch (e) {
@@ -995,6 +1348,7 @@
         badge.className = 'status processing';
         document.getElementById('postStatusText').textContent = 'Starting...';
         document.getElementById('btnPostStart').disabled = true;
+        document.getElementById('btnPostStop').disabled = false;
 
         try {
             const resp = await fetch('/api/postprocess/start', {
@@ -1017,6 +1371,7 @@
                 badge.className = 'status idle';
                 document.getElementById('postStatusText').textContent = data.error;
                 document.getElementById('btnPostStart').disabled = false;
+                document.getElementById('btnPostStop').disabled = true;
                 return;
             }
 
@@ -1029,6 +1384,21 @@
             badge.className = 'status idle';
             document.getElementById('postStatusText').textContent = e.message;
             document.getElementById('btnPostStart').disabled = false;
+            document.getElementById('btnPostStop').disabled = true;
+        }
+    }
+
+    async function stopPostProcess() {
+        const btnStop = document.getElementById('btnPostStop');
+        btnStop.disabled = true;
+        try {
+            const resp = await fetch('/api/postprocess/stop', { method: 'POST' });
+            const data = await resp.json();
+            if (data.error) {
+                alert('Error stopping: ' + data.error);
+            }
+        } catch (e) {
+            alert('Error stopping: ' + e.message);
         }
     }
 
@@ -1084,6 +1454,7 @@
                 progressBar.style.width = '100%';
                 progressBar.style.background = '#4caf50';
                 document.getElementById('btnPostStart').disabled = false;
+                document.getElementById('btnPostStop').disabled = true;
                 document.getElementById('btnExport').disabled = false;
 
                 // Refresh transcriptions list
@@ -1095,6 +1466,7 @@
                 badge.textContent = 'Error';
                 badge.className = 'status idle';
                 document.getElementById('btnPostStart').disabled = false;
+                document.getElementById('btnPostStop').disabled = true;
 
                 if (postEventSource) { postEventSource.close(); postEventSource = null; }
             }
@@ -1111,6 +1483,8 @@
             badge.textContent = 'Error';
             badge.className = 'status idle';
             document.getElementById('btnPostStart').disabled = false;
+            document.getElementById('btnPostStop').disabled = true;
+            document.getElementById('btnExport').disabled = false; // Allow export even on error
             const w = document.getElementById('postWarnings');
             w.innerHTML += '<div class="error">' + escapeHtml(data.message) + '</div>';
 
@@ -1369,6 +1743,7 @@
                     statusDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(data.error) + '</span>';
                     btn.disabled = false;
                     btnStop.disabled = true;
+                    btnExport.disabled = false; // Allow export even on error
                 }
             };
 
@@ -1456,6 +1831,7 @@
                 badge.className = 'status processing';
                 document.getElementById('postStatusText').textContent = 'Reconnecting...';
                 document.getElementById('btnPostStart').disabled = true;
+                document.getElementById('btnPostStop').disabled = false;
 
                 startPostSSE();
             } else if (data.status === 'done' && data.has_result) {
@@ -1471,12 +1847,39 @@
     // ---- Updates ----
     async function checkForUpdates() {
         try {
-            const resp = await fetch('/api/update', { method: 'POST' });
+            const resp = await fetch('/api/update/check');
             const data = await resp.json();
-            if (data.status === 'started') {
-                alert('Update check started in background. Check console output.');
-            } else {
-                alert('Error starting update: ' + data.error);
+
+            if (data.error) {
+                alert('Error checking for updates: ' + data.error);
+                return;
+            }
+
+            if (!data.update_available) {
+                alert('You are already on the latest version (' + data.current_version + ').');
+                return;
+            }
+
+            const msg = 'New version available: ' + data.latest_version + ' (current: ' + data.current_version + ')\n\n' +
+                        'Release Notes:\n' + data.release_notes + '\n\n' +
+                        'Do you want to update now?';
+
+            if (confirm(msg)) {
+                // Perform update
+                const performResp = await fetch('/api/update/perform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: data.download_url, version: data.latest_version })
+                });
+                const performData = await performResp.json();
+
+                if (performData.status === 'success') {
+                    alert('Update successful! The application is restarting...');
+                    // Reload page after a delay to allow server restart
+                    setTimeout(() => location.reload(), 3000);
+                } else {
+                    alert('Update failed: ' + (performData.error || 'Unknown error'));
+                }
             }
         } catch (e) {
             alert('Error: ' + e.message);
@@ -1567,7 +1970,7 @@
 
     // ---- Init ----
     loadSources();
-    loadFolders();
+    loadAllFolders();
     checkPostStatus();
     initPersistence();
     updateLanguageForModel();
@@ -1578,6 +1981,21 @@
     const savedFolder = localStorage.getItem('cenario_output_folder');
     if (savedFolder) {
         document.getElementById('outputFolder').value = savedFolder;
+    }
+    const savedPostFolder = localStorage.getItem('cenario_postOutputFolder');
+    if (savedPostFolder) {
+        document.getElementById('postOutputFolder').value = savedPostFolder;
+    }
+    const savedSummaryFolder = localStorage.getItem('cenario_summaryOutputFolder');
+    if (savedSummaryFolder) {
+        document.getElementById('summaryOutputFolder').value = savedSummaryFolder;
+    }
+
+    // Load persisted theme
+    const savedTheme = localStorage.getItem('cenario_theme');
+    if (savedTheme) {
+        document.getElementById('themeSelect').value = savedTheme;
+        changeTheme(savedTheme);
     }
 </script>
 
