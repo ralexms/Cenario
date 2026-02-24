@@ -13,7 +13,7 @@ import threading
 import traceback
 from datetime import datetime
 
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory
 
 # Add parent dir to path so we can import core modules
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -113,6 +113,16 @@ def _reset_summary_state():
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(BASE_DIR, 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+
+@app.route('/Cenaero_logo.svg')
+def logo():
+    return send_from_directory(BASE_DIR, 'Cenaero_logo.svg', mimetype='image/svg+xml')
 
 
 @app.route('/api/system_warnings')

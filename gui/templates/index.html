@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cenario — Meeting Transcription</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
@@ -494,12 +495,27 @@
             margin-bottom: 0;
             font-size: 0.85em;
         }
+
+        /* Logo */
+        .logo {
+            height: 52px;
+            display: block;
+            transition: filter 0.3s;
+        }
+        [data-theme="dark"] .logo,
+        [data-theme="solarized-dark"] .logo,
+        [data-theme="dracula"] .logo,
+        [data-theme="nord"] .logo,
+        [data-theme="monokai"] .logo,
+        [data-theme="gruvbox-dark"] .logo {
+            filter: invert(1);
+        }
     </style>
 </head>
 <body>
 
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-    <h1 style="margin:0;">Cenario</h1>
+    <img class="logo" src="/Cenaero_logo.svg" alt="Cenaero">
     <button class="btn-action" onclick="checkForUpdates()">Check for Updates</button>
 </div>
 
