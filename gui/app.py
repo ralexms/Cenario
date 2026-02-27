@@ -980,6 +980,39 @@ def api_summarize_start():
 
     return jsonify({'status': 'started', 'file': file_path})
 
+@app.route('/api/summarize/stream')
+def api_summarize_stream():
+    """SSE stream for summarization text generation."""
+    def generate():
+        pos = 0
+        while True:
+            with _summary['stream_lock']:
+                new_items = _summary['stream_queue'][pos:]
+                pos = len(_summary['stream_queue'])
+
+            for item in new_items:
+                yield f"data: {json.dumps({'text': item})}\n\n"
+
+            if _summary['status'] in ('done', 'error'):
+                # Drain remaining
+                with _summary['stream_lock']:
+                    remaining = _summary['stream_queue'][pos:]
+                for item in remaining:
+                    yield f"data: {json.dumps({'text': item})}\n\n"
+
+                if _summary['status'] == 'done':
+                    yield f"data: {json.dumps({'done': True, 'result': _summary['result']})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'error': _summary['error']})}\n\n"
+                break
+
+            import time
+            time.sleep(0.1)
+            yield ": keepalive\n\n"
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
 @app.route('/api/summarize/stop', methods=['POST'])
 def api_summarize_stop():
     if _summary['status'] != 'summarizing':

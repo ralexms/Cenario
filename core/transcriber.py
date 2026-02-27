@@ -84,13 +84,15 @@ def _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds=10):
     Returns list of (file_path, chunk_start_sec, chunk_end_sec) tuples.
     If the file is shorter than one chunk, returns [(audio_file, 0.0, duration)]
     with no temp files created.
+
+    Reads each chunk directly from disk via seek to avoid loading the
+    entire file into memory at once.
     """
     with wave.open(audio_file, 'rb') as wf:
         n_channels = wf.getnchannels()
         sampwidth = wf.getsampwidth()
         framerate = wf.getframerate()
         n_frames = wf.getnframes()
-        all_frames = wf.readframes(n_frames)
 
     duration = n_frames / framerate
     chunk_sec = chunk_minutes * 60
@@ -98,14 +100,19 @@ def _split_audio_chunks(audio_file, chunk_minutes, overlap_seconds=10):
     if duration <= chunk_sec:
         return [(audio_file, 0.0, duration)]
 
+    bytes_per_frame = n_channels * sampwidth
     chunks = []
     pos = 0.0
     while pos < duration:
         end = min(pos + chunk_sec, duration)
         start_frame = int(pos * framerate)
         end_frame = int(end * framerate)
-        bytes_per_frame = n_channels * sampwidth
-        chunk_bytes = all_frames[start_frame * bytes_per_frame:end_frame * bytes_per_frame]
+        n_chunk_frames = end_frame - start_frame
+
+        # Read only the frames needed for this chunk from disk
+        with wave.open(audio_file, 'rb') as wf:
+            wf.setpos(start_frame)
+            chunk_bytes = wf.readframes(n_chunk_frames)
 
         tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
         tmp_path = tmp.name
@@ -247,18 +254,26 @@ class Transcriber:
             'segments': []
         }
 
-        for segment in segments:
-            if self._stop_requested:
-                print("Transcription stopped by user.")
-                break
-            seg = {
-                'start': segment.start,
-                'end': segment.end,
-                'text': segment.text
-            }
-            result['segments'].append(seg)
-            if on_segment:
-                on_segment(seg)
+        try:
+            for segment in segments:
+                if self._stop_requested:
+                    print("Transcription stopped by user.")
+                    break
+                seg = {
+                    'start': segment.start,
+                    'end': segment.end,
+                    'text': segment.text
+                }
+                result['segments'].append(seg)
+                if on_segment:
+                    on_segment(seg)
+        finally:
+            # Explicitly close the generator to free the encoder output
+            # and any CTranslate2 GPU buffers it holds.
+            if hasattr(segments, 'close'):
+                segments.close()
+            del segments
+            gc.collect()
 
         return result
 
@@ -310,10 +325,6 @@ class Transcriber:
                                   f"({start_m:02d}:{start_s:02d} - {end_m:02d}:{end_s:02d})")
                     })
 
-                # Unload model between chunks to reset CTranslate2 memory pool
-                if idx > 0:
-                    self.unload_model()
-
                 # Collect segments for this chunk with adjusted timestamps.
                 # For the first chunk all segments are emitted immediately.
                 # For later chunks, segments clearly past the overlap zone are
@@ -345,6 +356,10 @@ class Transcriber:
                                          on_segment=_chunk_cb,
                                          beam_size=beam_size,
                                          vad_filter=vad_filter)
+
+                # Immediately unload after each chunk to free GPU memory
+                # before doing any post-processing (dedup, callbacks).
+                self.unload_model()
 
                 # Pin language from first chunk
                 if idx == 0:

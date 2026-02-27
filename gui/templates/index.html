@@ -1087,28 +1087,25 @@
             const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
             const folders = await resp.json();
 
-            let targetSel;
+            let targets;
             if (sourceId === 'postOutputFolder') {
-                targetSel = document.getElementById('postFolder');
+                targets = [document.getElementById('postFolder')];
             } else if (sourceId === 'summaryOutputFolder') {
-                targetSel = document.getElementById('summaryFolder');
+                targets = [document.getElementById('summaryFolder')];
             } else {
-                // Default behavior (legacy or recording tab) - update both if they use default
-                // But now we have separate inputs, so we should probably update based on which tab we are in or update all?
-                // For simplicity, let's update the dropdowns corresponding to the input
-                // If called from loadFolders() without args, we might need to check all inputs
-                return;
+                // Recording tab folder changed — update both post and summary dropdowns
+                targets = [document.getElementById('postFolder'), document.getElementById('summaryFolder')];
             }
 
-            const html = '<option value="">Select a folder...</option>';
-            targetSel.innerHTML = html;
-
-            folders.forEach(f => {
-                const opt = document.createElement('option');
-                opt.value = f.path;
-                opt.textContent = f.name;
-                targetSel.appendChild(opt);
-            });
+            for (const targetSel of targets) {
+                targetSel.innerHTML = '<option value="">Select a folder...</option>';
+                folders.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.path;
+                    opt.textContent = f.name;
+                    targetSel.appendChild(opt);
+                });
+            }
         } catch (e) {
             console.error('Failed to load folders:', e);
         }
@@ -1116,29 +1113,26 @@
 
     // Wrapper to load all folders on init
     async function loadAllFolders() {
-        const inputs = ['outputFolder', 'postOutputFolder', 'summaryOutputFolder'];
-        for (const id of inputs) {
+        const sources = [
+            { inputId: 'postOutputFolder', targetId: 'postFolder' },
+            { inputId: 'summaryOutputFolder', targetId: 'summaryFolder' },
+        ];
+        for (const { inputId, targetId } of sources) {
              try {
-                const outputFolder = document.getElementById(id).value || 'recordings';
+                const outputFolder = document.getElementById(inputId).value || 'recordings';
                 const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
                 const folders = await resp.json();
 
-                let targetSel = null;
-                if (id === 'postOutputFolder') targetSel = document.getElementById('postFolder');
-                if (id === 'summaryOutputFolder') targetSel = document.getElementById('summaryFolder');
-
-                if (targetSel) {
-                    const html = '<option value="">Select a folder...</option>';
-                    targetSel.innerHTML = html;
-                    folders.forEach(f => {
-                        const opt = document.createElement('option');
-                        opt.value = f.path;
-                        opt.textContent = f.name;
-                        targetSel.appendChild(opt);
-                    });
-                }
+                const targetSel = document.getElementById(targetId);
+                targetSel.innerHTML = '<option value="">Select a folder...</option>';
+                folders.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.path;
+                    opt.textContent = f.name;
+                    targetSel.appendChild(opt);
+                });
              } catch (e) {
-                 console.error(`Failed to load folders for ${id}:`, e);
+                 console.error(`Failed to load folders for ${inputId}:`, e);
              }
         }
     }
@@ -1994,7 +1988,7 @@
     updateMaxTokensPlaceholder();
 
     // Load persisted folder
-    const savedFolder = localStorage.getItem('cenario_output_folder');
+    const savedFolder = localStorage.getItem('cenario_outputFolder') || localStorage.getItem('cenario_output_folder');
     if (savedFolder) {
         document.getElementById('outputFolder').value = savedFolder;
     }
