@@ -97,6 +97,7 @@ class Summarizer:
             elif use_cuda and self.quantization == "8":
                 quantization_config = BitsAndBytesConfig(
                     load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True,
                 )
                 self.pipe = pipeline(
                     "text-generation",
@@ -404,18 +405,16 @@ class Summarizer:
             instruction = (
                 "List every concrete task, decision, or follow-up from this meeting as a bulleted list. "
                 "Include the assigned owner next to each item if mentioned. "
-                "If there are none, write 'None identified.'"
+                "If there are none, don't write any assigned person or institution."
             )
         elif section == "open_questions":
             instruction = (
-                "List any unresolved issues or open questions from this meeting as a bulleted list. "
-                "If there are none, write 'None identified.'"
+                "List any unresolved issues or open questions from this meeting as a bulleted list."
             )
         elif section == "qa":
             instruction = (
                 "List the key questions raised during this meeting along with their answers as a bulleted list. "
-                "Format each item as: '- Q: [question] / A: [answer]'. "
-                "If there are none, write 'None identified.'"
+                "Format each item as: '- Q: [question] / A: [answer]'."
             )
         else:
             raise ValueError(f"Unknown section: {section}")
@@ -501,7 +500,7 @@ class Summarizer:
                 return self._summarize_single(system_prompt, content_prefix + custom_prompt, max_new_tokens, stream_callback)
             return self._summarize_sections(content_prefix, detail_level, stream_callback)
 
-        # --- MAP phase: summarize each chunk ---
+        # --- MAP phase: summarize each chunk with separate per-section prompts ---
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
             if self.stop_event.is_set():
@@ -511,27 +510,17 @@ class Summarizer:
                 header = f"\n--- Summarizing chunk {i+1}/{num_chunks} ---\n\n"
                 stream_callback(header)
 
-            chunk_prompt = (
-                f"Here is part {i+1} of {num_chunks} of a meeting transcript:\n\n{chunk}\n\n"
-                "Write a summary of this section in flowing prose paragraphs. "
-                "Do not start with a bullet list — begin directly with a narrative paragraph. "
-                "Cover all key topics, arguments, decisions, and any problems or difficulties mentioned.\n\n"
-                "## Action Points\n"
-                "After the summary, list any tasks, decisions, or follow-ups from this section as a bulleted list."
-            )
+            content_prefix = f"Here is part {i+1} of {num_chunks} of a meeting transcript:\n\n{chunk}\n\n"
 
             try:
-                summary = self._summarize_single(system_prompt, chunk_prompt, max_new_tokens, stream_callback)
-                chunk_summaries.append(summary)
+                chunk_result = self._summarize_sections(content_prefix, detail_level, stream_callback)
+                chunk_summaries.append(chunk_result)
             except torch.cuda.OutOfMemoryError:
                 print(f"OOM during chunk {i+1}/{num_chunks}")
                 raise RuntimeError(
                     f"GPU Out of Memory while summarizing chunk {i+1}/{num_chunks}. "
                     "Try a smaller model or enable quantization."
                 )
-
-            # Free KV cache between chunks
-            self._free_kv_cache()
 
         # Store chunk summaries for export
         self.chunk_summaries = list(chunk_summaries)
