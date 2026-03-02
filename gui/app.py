@@ -158,6 +158,22 @@ def api_sources():
     return jsonify(data)
 
 
+@app.route('/api/mic/mute', methods=['GET'])
+def api_mic_mute_get():
+    source = request.args.get('source', '')
+    result = AudioCapture.get_source_mute(source)
+    return jsonify(result)
+
+
+@app.route('/api/mic/mute', methods=['POST'])
+def api_mic_mute_post():
+    data = request.get_json(force=True)
+    source = data.get('source', '')
+    muted = data.get('muted', True)
+    result = AudioCapture.set_source_mute(source, muted)
+    return jsonify(result)
+
+
 @app.route('/api/recordings')
 def api_recordings():
     """List WAV files in recordings directory."""

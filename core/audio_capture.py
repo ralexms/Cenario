@@ -1450,6 +1450,109 @@ class AudioCapture:
         }
 
     @staticmethod
+    def set_source_mute(source_name, muted):
+        """Mute or unmute an audio source at the system level.
+
+        Args:
+            source_name: PulseAudio source name (Linux) or device index string (Windows/macOS)
+            muted: True to mute, False to unmute
+
+        Returns:
+            dict with 'success' bool and optional 'error' string
+        """
+        if PLATFORM == 'Linux':
+            try:
+                val = '1' if muted else '0'
+                subprocess.run(
+                    ['pactl', 'set-source-mute', source_name, val],
+                    capture_output=True, text=True, check=True
+                )
+                return {'success': True}
+            except subprocess.CalledProcessError as e:
+                return {'success': False, 'error': str(e)}
+        elif PLATFORM == 'Darwin':
+            try:
+                val = 'true' if muted else 'false'
+                subprocess.run(
+                    ['osascript', '-e', f'set volume input volume {0 if muted else 100}'],
+                    capture_output=True, text=True, check=True
+                )
+                return {'success': True}
+            except subprocess.CalledProcessError as e:
+                return {'success': False, 'error': str(e)}
+        elif PLATFORM == 'Windows':
+            # Use pycaw to mute the default capture device
+            if not _HAS_PYCAW:
+                return {'success': False, 'error': 'pycaw not installed'}
+            try:
+                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+                from comtypes import CLSCTX_ALL
+                from ctypes import cast, POINTER
+                import comtypes
+                devices = AudioUtilities.GetMicrophone()
+                if devices is None:
+                    return {'success': False, 'error': 'No microphone found'}
+                interface = devices.Activate(
+                    IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+                )
+                volume = cast(interface, POINTER(IAudioEndpointVolume))
+                volume.SetMute(1 if muted else 0, None)
+                return {'success': True}
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': f'Unsupported platform: {PLATFORM}'}
+
+    @staticmethod
+    def get_source_mute(source_name):
+        """Get the mute state of an audio source.
+
+        Args:
+            source_name: PulseAudio source name (Linux) or device index string (Windows/macOS)
+
+        Returns:
+            dict with 'muted' bool and 'success' bool
+        """
+        if PLATFORM == 'Linux':
+            try:
+                result = subprocess.run(
+                    ['pactl', 'get-source-mute', source_name],
+                    capture_output=True, text=True, check=True
+                )
+                muted = 'yes' in result.stdout.lower()
+                return {'success': True, 'muted': muted}
+            except subprocess.CalledProcessError as e:
+                return {'success': False, 'muted': False, 'error': str(e)}
+        elif PLATFORM == 'Darwin':
+            try:
+                result = subprocess.run(
+                    ['osascript', '-e', 'input volume of (get volume settings)'],
+                    capture_output=True, text=True, check=True
+                )
+                vol = int(result.stdout.strip())
+                return {'success': True, 'muted': vol == 0}
+            except Exception as e:
+                return {'success': False, 'muted': False, 'error': str(e)}
+        elif PLATFORM == 'Windows':
+            if not _HAS_PYCAW:
+                return {'success': False, 'muted': False, 'error': 'pycaw not installed'}
+            try:
+                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+                from comtypes import CLSCTX_ALL
+                from ctypes import cast, POINTER
+                devices = AudioUtilities.GetMicrophone()
+                if devices is None:
+                    return {'success': False, 'muted': False, 'error': 'No microphone found'}
+                interface = devices.Activate(
+                    IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+                )
+                volume = cast(interface, POINTER(IAudioEndpointVolume))
+                muted = bool(volume.GetMute())
+                return {'success': True, 'muted': muted}
+            except Exception as e:
+                return {'success': False, 'muted': False, 'error': str(e)}
+        return {'success': False, 'muted': False, 'error': f'Unsupported platform: {PLATFORM}'}
+
+    @staticmethod
     def find_active_sources():
         """
         Find currently active (RUNNING) sources.

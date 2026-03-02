@@ -270,6 +270,10 @@
         .btn-stop { background: var(--error-color); color: #fff; }
         .btn-action { background: var(--primary-color); color: #fff; }
         .btn-warn { background: var(--warning-color); color: #fff; }
+        .btn-mute { background: transparent; border: 1px solid var(--input-border); color: var(--text-color); padding: 7px 8px; margin-bottom: 10px; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background 0.2s, color 0.2s, border-color 0.2s; }
+        .btn-mute:hover { background: var(--secondary-bg); }
+        .btn-mute.muted { background: var(--error-color); color: #fff; border-color: var(--error-color); }
+        .btn-mute svg { width: 18px; height: 18px; fill: currentColor; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
         .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -584,7 +588,13 @@
             </div>
             <div>
                 <label for="mic">Microphone</label>
-                <select id="mic"><option value="">Loading...</option></select>
+                <div style="display:flex; gap:6px; align-items:start;">
+                    <select id="mic" style="flex:1;"><option value="">Loading...</option></select>
+                    <button id="micMuteBtn" class="btn-mute" onclick="toggleMicMute()" title="Mute/Unmute Microphone">
+                        <svg id="micIcon" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                        <svg id="micMutedIcon" viewBox="0 0 24 24" style="display:none;"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM14.98 11.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
+                    </button>
+                </div>
             </div>
         </div>
         <button class="btn-action" onclick="loadSources()" style="margin-bottom: 20px;">Refresh Sources</button>
@@ -1072,10 +1082,72 @@
                 }
             }
 
+            checkMicMute();
         } catch (e) {
             console.error('Failed to load sources:', e);
         }
     }
+
+    let micMuted = false;
+
+    async function toggleMicMute() {
+        const micSel = document.getElementById('mic');
+        const source = micSel.value;
+        if (!source) return;
+        const newMuted = !micMuted;
+        try {
+            const resp = await fetch('/api/mic/mute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({source: source, muted: newMuted})
+            });
+            const data = await resp.json();
+            if (data.success) {
+                micMuted = newMuted;
+                updateMuteUI();
+            } else {
+                console.error('Mute failed:', data.error);
+            }
+        } catch (e) {
+            console.error('Mute request failed:', e);
+        }
+    }
+
+    function updateMuteUI() {
+        const btn = document.getElementById('micMuteBtn');
+        const iconOn = document.getElementById('micIcon');
+        const iconOff = document.getElementById('micMutedIcon');
+        if (micMuted) {
+            btn.classList.add('muted');
+            btn.title = 'Unmute Microphone';
+            iconOn.style.display = 'none';
+            iconOff.style.display = '';
+        } else {
+            btn.classList.remove('muted');
+            btn.title = 'Mute Microphone';
+            iconOn.style.display = '';
+            iconOff.style.display = 'none';
+        }
+    }
+
+    async function checkMicMute() {
+        const micSel = document.getElementById('mic');
+        const source = micSel.value;
+        if (!source) return;
+        try {
+            const resp = await fetch('/api/mic/mute?source=' + encodeURIComponent(source));
+            const data = await resp.json();
+            if (data.success) {
+                micMuted = data.muted;
+                updateMuteUI();
+            }
+        } catch (e) {
+            console.error('Mute check failed:', e);
+        }
+    }
+
+    // Check mute state when mic selection changes
+    document.getElementById('mic').addEventListener('change', checkMicMute);
 
     async function loadFolders(sourceId = 'outputFolder') {
         try {
