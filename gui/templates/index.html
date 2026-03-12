@@ -665,7 +665,10 @@
                 <div style="display:flex; gap:8px;">
                     <select id="postFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('postFile', 'audio')">Browse</button>
+                    <button class="btn-action" onclick="document.getElementById('uploadPostFile').click()" title="Upload a file from your browser. Use this when accessing Cenario remotely from another machine.">Upload</button>
+                    <input type="file" id="uploadPostFile" accept=".wav,.mp3,.m4a,.flac,.ogg" style="display:none" onchange="uploadFile(this, 'postFile', 'audio')">
                 </div>
+                <div id="uploadPostProgress" class="info" style="margin-top:4px;"></div>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
@@ -793,7 +796,10 @@
                 <div style="display:flex; gap:8px;">
                     <select id="summaryFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('summaryFile', 'transcription')">Browse</button>
+                    <button class="btn-action" onclick="document.getElementById('uploadSummaryFile').click()" title="Upload a file from your browser. Use this when accessing Cenario remotely from another machine.">Upload</button>
+                    <input type="file" id="uploadSummaryFile" accept=".json,.txt,.srt" style="display:none" onchange="uploadFile(this, 'summaryFile', 'transcription')">
                 </div>
+                <div id="uploadSummaryProgress" class="info" style="margin-top:4px;"></div>
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
@@ -870,6 +876,7 @@
         <div id="summaryOutput" class="output-area" style="height: 200px;"></div>
         <div style="margin-top:10px;">
              <button id="btnExportMd" class="btn-action" onclick="exportMarkdown()" disabled>Export as Markdown</button>
+             <button id="btnDownloadSummary" class="btn-action" onclick="downloadSummaryFiles()" disabled title="Download summary files to your browser. Use this when accessing Cenario remotely to get the files back to your machine.">Download Summary</button>
              <span id="exportMdStatus" class="info"></span>
         </div>
     </div>
@@ -1038,6 +1045,77 @@
                 }
             })
             .catch(err => console.error(err));
+    }
+
+    // ---- Upload File (browser-based, for remote access) ----
+    async function uploadFile(input, targetId, type) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const progressId = targetId === 'postFile' ? 'uploadPostProgress' : 'uploadSummaryProgress';
+        const progressEl = document.getElementById(progressId);
+        progressEl.textContent = 'Uploading ' + file.name + '...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('type', type);
+
+        try {
+            const resp = await fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await resp.json();
+
+            if (!resp.ok) {
+                progressEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
+                return;
+            }
+
+            progressEl.innerHTML = '<span class="success">Uploaded to ' + escapeHtml(data.path) + '</span>';
+
+            // Add to select dropdown and select it
+            const sel = document.getElementById(targetId);
+            const opt = document.createElement('option');
+            opt.value = data.path;
+            opt.textContent = data.name + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '');
+            sel.appendChild(opt);
+            sel.value = data.path;
+
+            if (targetId === 'postFile') {
+                currentFile = data.path;
+            }
+
+            // Reload folders so the new folder appears in the dropdown
+            if (targetId === 'postFile') {
+                loadFolders();
+            } else {
+                loadFolders('summaryOutputFolder');
+            }
+        } catch (e) {
+            progressEl.innerHTML = '<span class="error">Upload failed: ' + escapeHtml(e.message) + '</span>';
+        }
+
+        // Reset the input so the same file can be re-uploaded
+        input.value = '';
+    }
+
+    // ---- Download Summary Files ----
+    var lastExportedSummaryFiles = [];
+
+    async function downloadSummaryFiles() {
+        if (lastExportedSummaryFiles.length === 0) {
+            alert('Export the summary as Markdown first, then download.');
+            return;
+        }
+        for (const filePath of lastExportedSummaryFiles) {
+            const a = document.createElement('a');
+            a.href = '/api/download?path=' + encodeURIComponent(filePath);
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
     }
 
     // ---- Sources ----
@@ -1780,6 +1858,8 @@
         btn.disabled = true;
         btnStop.disabled = false;
         btnExport.disabled = true;
+        document.getElementById('btnDownloadSummary').disabled = true;
+        lastExportedSummaryFiles = [];
         document.getElementById('exportMdStatus').textContent = '';
 
         try {
@@ -1874,6 +1954,8 @@
 
             if (resp.ok) {
                 const files = data.files || [data.file];
+                lastExportedSummaryFiles = files;
+                document.getElementById('btnDownloadSummary').disabled = false;
                 statusEl.innerHTML = '<span class="success">Saved to:<br>' + files.map(f => escapeHtml(f)).join('<br>') + '</span>';
             } else {
                 statusEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';

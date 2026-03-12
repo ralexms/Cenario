@@ -13,7 +13,7 @@ import threading
 import traceback
 from datetime import datetime
 
-from flask import Flask, render_template, request, jsonify, Response, send_from_directory
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory, send_file
 
 # Add parent dir to path so we can import core modules
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -276,6 +276,65 @@ def api_browse_file():
     except Exception as e:
         print(f"Error opening file dialog: {e}")
         return jsonify({'error': str(e)}), 500
+
+ALLOWED_AUDIO_EXT = {'.wav', '.mp3', '.m4a', '.flac', '.ogg'}
+ALLOWED_TRANSCRIPTION_EXT = {'.json', '.txt', '.srt'}
+
+@app.route('/api/upload', methods=['POST'])
+def api_upload():
+    """Accept a file upload from the browser and save it to DATA_DIR."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    uploaded = request.files['file']
+    if not uploaded.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    # Sanitise the filename to prevent path-traversal attacks.
+    from werkzeug.utils import secure_filename
+    safe_name = secure_filename(uploaded.filename)
+    if not safe_name:
+        return jsonify({'error': 'Invalid filename'}), 400
+
+    file_type = request.form.get('type', 'audio')
+    allowed = ALLOWED_AUDIO_EXT if file_type == 'audio' else ALLOWED_TRANSCRIPTION_EXT
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext not in allowed:
+        return jsonify({'error': f'File type {ext} not allowed'}), 400
+
+    # Create a subfolder named after the file (without extension) to mirror
+    # the original folder structure from the client machine.
+    folder_name = os.path.splitext(safe_name)[0]
+    dest_dir = os.path.join(DATA_DIR, folder_name)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    dest_path = os.path.join(dest_dir, safe_name)
+    uploaded.save(dest_path)
+
+    size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+    return jsonify({
+        'path': dest_path,
+        'name': uploaded.filename,
+        'size_mb': round(size_mb, 1),
+        'folder': dest_dir,
+    })
+
+
+@app.route('/api/download')
+def api_download():
+    """Send a server-side file to the browser as a download."""
+    file_path = request.args.get('path', '')
+    if not file_path or not os.path.isfile(file_path):
+        return jsonify({'error': 'File not found'}), 404
+
+    # Only allow downloading files under DATA_DIR or BASE_DIR for safety.
+    real = os.path.realpath(file_path)
+    if not (real.startswith(os.path.realpath(DATA_DIR) + os.sep)
+            or real.startswith(os.path.realpath(BASE_DIR) + os.sep)):
+        return jsonify({'error': 'Access denied'}), 403
+
+    return send_file(file_path, as_attachment=True)
+
 
 @app.route('/api/record/start', methods=['POST'])
 def api_record_start():
