@@ -999,6 +999,26 @@
     // ---- Client directory handles (File System Access API) ----
     // Keyed by folder input ID, stores FileSystemDirectoryHandle for client-side exports
     const clientDirHandles = {};
+    const clientFolderRefs = { postFolder: {}, summaryFolder: {} };
+    const clientFileRefs = { postFile: {}, summaryFile: {} };
+    let clientRefCounter = 0;
+    const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3', '.m4a', '.flac', '.ogg']);
+    const TRANSCRIPTION_EXTENSIONS = new Set(['.json', '.txt', '.srt']);
+
+    function nextClientRef(prefix) {
+        clientRefCounter += 1;
+        return 'clientfs:' + prefix + ':' + clientRefCounter;
+    }
+
+    function isClientRef(value) {
+        return typeof value === 'string' && value.startsWith('clientfs:');
+    }
+
+    function fileExtension(filename) {
+        const idx = filename.lastIndexOf('.');
+        if (idx < 0) return '';
+        return filename.slice(idx).toLowerCase();
+    }
 
     // Fetch server-side files and write them into a client directory handle
     async function saveToClientDir(dirHandle, serverFilePaths) {
@@ -1033,6 +1053,70 @@
         }
     }
 
+    async function fetchServerFolders(base) {
+        const url = base
+            ? '/api/folders?base=' + encodeURIComponent(base)
+            : '/api/folders';
+        const resp = await fetch(url);
+        let folders = await resp.json();
+
+        // If a stale client-side folder name was persisted in localStorage, fall back to DATA_DIR.
+        if (base && !base.startsWith('/') && Array.isArray(folders) && folders.length === 0) {
+            const fallbackResp = await fetch('/api/folders');
+            const fallback = await fallbackResp.json();
+            if (Array.isArray(fallback) && fallback.length) {
+                folders = fallback;
+            }
+        }
+
+        return folders;
+    }
+
+    async function loadClientMeetingFolders(sourceId) {
+        const folderSelectId = sourceId === 'postOutputFolder' ? 'postFolder'
+            : sourceId === 'summaryOutputFolder' ? 'summaryFolder'
+            : null;
+        if (!folderSelectId) return false;
+
+        const rootHandle = clientDirHandles[sourceId];
+        if (!rootHandle) return false;
+
+        const folderSel = document.getElementById(folderSelectId);
+        const fileSel = document.getElementById(folderSelectId === 'postFolder' ? 'postFile' : 'summaryFile');
+        const subfolders = [];
+
+        try {
+            for await (const entry of rootHandle.values()) {
+                if (entry.kind === 'directory') {
+                    subfolders.push(entry);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to enumerate client folder entries:', e);
+            return false;
+        }
+
+        subfolders.sort((a, b) => a.name.localeCompare(b.name));
+        clientFolderRefs[folderSelectId] = {};
+        clientFileRefs[fileSel.id] = {};
+        folderSel.innerHTML = '<option value="">Select a folder...</option>';
+
+        subfolders.forEach((handle) => {
+            const ref = nextClientRef(folderSelectId);
+            clientFolderRefs[folderSelectId][ref] = handle;
+            const opt = document.createElement('option');
+            opt.value = ref;
+            opt.textContent = handle.name + ' (client)';
+            folderSel.appendChild(opt);
+        });
+
+        if (!subfolders.length) {
+            folderSel.innerHTML = '<option value="">No folders found in selected client directory</option>';
+        }
+        fileSel.innerHTML = '<option value="">Select a folder first</option>';
+        return true;
+    }
+
     // ---- Browse Folder ----
     async function browseFolder(targetId) {
         if ('showDirectoryPicker' in window) {
@@ -1040,6 +1124,8 @@
                 const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
                 clientDirHandles[targetId] = handle;
                 document.getElementById(targetId).value = handle.name;
+                localStorage.setItem('cenario_' + targetId, handle.name);
+                await loadFolders(targetId);
             } catch (e) {
                 if (e.name !== 'AbortError') console.error(e);
             }
@@ -1077,7 +1163,7 @@
     }
 
     // ---- Upload helpers ----
-    async function uploadFileObject(file, targetId, type) {
+    async function uploadFileObject(file, targetId, type, refreshFolders = true) {
         const progressId = targetId === 'postFile' ? 'uploadPostProgress' : 'uploadSummaryProgress';
         const progressEl = document.getElementById(progressId);
         progressEl.textContent = 'Uploading ' + file.name + '...';
@@ -1106,8 +1192,13 @@
 
             if (targetId === 'postFile') currentFile = data.path;
 
-            if (targetId === 'postFile') loadFolders();
-            else loadFolders('summaryOutputFolder');
+            if (refreshFolders) {
+                if (targetId === 'postFile' && !clientDirHandles.postOutputFolder) {
+                    await loadFolders('postOutputFolder');
+                } else if (targetId === 'summaryFile' && !clientDirHandles.summaryOutputFolder) {
+                    await loadFolders('summaryOutputFolder');
+                }
+            }
         } catch (e) {
             progressEl.innerHTML = '<span class="error">Upload failed: ' + escapeHtml(e.message) + '</span>';
         }
@@ -1224,13 +1315,17 @@
 
     async function loadFolders(sourceId = 'outputFolder') {
         try {
+            if ((sourceId === 'postOutputFolder' || sourceId === 'summaryOutputFolder') && clientDirHandles[sourceId]) {
+                const loaded = await loadClientMeetingFolders(sourceId);
+                if (loaded) return;
+            }
+
             let outputFolder = 'recordings';
             if (sourceId && !clientDirHandles[sourceId]) {
                 outputFolder = document.getElementById(sourceId).value || 'recordings';
             }
 
-            const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
-            const folders = await resp.json();
+            const folders = await fetchServerFolders(outputFolder);
 
             let targets;
             if (sourceId === 'postOutputFolder') {
@@ -1243,6 +1338,7 @@
             }
 
             for (const targetSel of targets) {
+                clientFolderRefs[targetSel.id] = {};
                 targetSel.innerHTML = '<option value="">Select a folder...</option>';
                 folders.forEach(f => {
                     const opt = document.createElement('option');
@@ -1264,13 +1360,16 @@
         ];
         for (const { inputId, targetId } of sources) {
              try {
-                const outputFolder = clientDirHandles[inputId]
-                    ? 'recordings'
-                    : (document.getElementById(inputId).value || 'recordings');
-                const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
-                const folders = await resp.json();
+                if (clientDirHandles[inputId]) {
+                    const loaded = await loadClientMeetingFolders(inputId);
+                    if (loaded) continue;
+                }
+
+                const outputFolder = document.getElementById(inputId).value || 'recordings';
+                const folders = await fetchServerFolders(outputFolder);
 
                 const targetSel = document.getElementById(targetId);
+                clientFolderRefs[targetId] = {};
                 targetSel.innerHTML = '<option value="">Select a folder...</option>';
                 folders.forEach(f => {
                     const opt = document.createElement('option');
@@ -1289,14 +1388,50 @@
         if (!folder) return;
 
         try {
+            const sel = document.getElementById('postFile');
+            sel.innerHTML = '';
+
+            if (isClientRef(folder) && clientFolderRefs.postFolder[folder]) {
+                const dirHandle = clientFolderRefs.postFolder[folder];
+                const files = [];
+                for await (const entry of dirHandle.values()) {
+                    if (entry.kind !== 'file') continue;
+                    if (!AUDIO_EXTENSIONS.has(fileExtension(entry.name))) continue;
+                    const file = await entry.getFile();
+                    files.push({ handle: entry, name: entry.name, size_mb: file.size / (1024 * 1024) });
+                }
+
+                files.sort((a, b) => a.name.localeCompare(b.name));
+                clientFileRefs.postFile = {};
+
+                if (!files.length) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'No audio files found in selected client folder';
+                    sel.appendChild(opt);
+                    currentFile = null;
+                    return;
+                }
+
+                files.forEach(f => {
+                    const ref = nextClientRef('postFile');
+                    clientFileRefs.postFile[ref] = f.handle;
+                    const opt = document.createElement('option');
+                    opt.value = ref;
+                    opt.textContent = f.name + ' (' + f.size_mb.toFixed(1) + ' MB, client)';
+                    sel.appendChild(opt);
+                });
+
+                currentFile = null;
+                return;
+            }
+
+            clientFileRefs.postFile = {};
             // Load transcriptions for speaker naming
             loadTranscriptions(folder);
 
             const resp = await fetch('/api/folder_files?folder=' + encodeURIComponent(folder));
             const files = await resp.json();
-
-            const sel = document.getElementById('postFile');
-            sel.innerHTML = '';
 
             if (!files.length) {
                 const opt = document.createElement('option');
@@ -1326,11 +1461,41 @@
         if (!folder) return;
 
         try {
-            const resp = await fetch('/api/folder_transcriptions?folder=' + encodeURIComponent(folder));
-            const files = await resp.json();
-
             const sel = document.getElementById('summaryFile');
             sel.innerHTML = '';
+
+            if (isClientRef(folder) && clientFolderRefs.summaryFolder[folder]) {
+                const dirHandle = clientFolderRefs.summaryFolder[folder];
+                const files = [];
+                for await (const entry of dirHandle.values()) {
+                    if (entry.kind !== 'file') continue;
+                    if (!TRANSCRIPTION_EXTENSIONS.has(fileExtension(entry.name))) continue;
+                    const file = await entry.getFile();
+                    files.push({ handle: entry, name: entry.name, size_kb: file.size / 1024 });
+                }
+
+                files.sort((a, b) => a.name.localeCompare(b.name));
+                clientFileRefs.summaryFile = {};
+
+                if (!files.length) {
+                    sel.innerHTML = '<option value="">No transcription files found in selected client folder</option>';
+                    return;
+                }
+
+                files.forEach(f => {
+                    const ref = nextClientRef('summaryFile');
+                    clientFileRefs.summaryFile[ref] = f.handle;
+                    const opt = document.createElement('option');
+                    opt.value = ref;
+                    opt.textContent = f.name + ' (' + f.size_kb.toFixed(1) + ' KB, client)';
+                    sel.appendChild(opt);
+                });
+                return;
+            }
+
+            clientFileRefs.summaryFile = {};
+            const resp = await fetch('/api/folder_transcriptions?folder=' + encodeURIComponent(folder));
+            const files = await resp.json();
 
             if (!files.length) {
                 sel.innerHTML = '<option value="">No transcriptions found</option>';
@@ -1356,8 +1521,13 @@
         const liveModel = document.getElementById('liveModel').value;
         const chunk = parseInt(document.getElementById('chunkSize').value) || 5;
         const meetingName = document.getElementById('meetingName').value;
-        const outputFolder = document.getElementById('outputFolder').value;
+        let outputFolder = document.getElementById('outputFolder').value;
         const language = document.getElementById('language').value;
+
+        // When a client folder handle is selected, keep recording output on server DATA_DIR.
+        if (clientDirHandles.outputFolder) {
+            outputFolder = 'recordings';
+        }
 
         // Save selection
         if (monitor) localStorage.setItem('cenario_last_monitor', monitor);
@@ -1490,10 +1660,25 @@
     // ---- Post-Processing ----
     async function startPostProcess() {
         const fileSel = document.getElementById('postFile');
-        const file = fileSel.value;
+        let file = fileSel.value;
         if (!file) {
             alert('Select an audio file first');
             return;
+        }
+
+        if (isClientRef(file) && clientFileRefs.postFile[file]) {
+            try {
+                const clientFile = await clientFileRefs.postFile[file].getFile();
+                await uploadFileObject(clientFile, 'postFile', 'audio', false);
+                file = fileSel.value;
+            } catch (e) {
+                alert('Failed to load client file: ' + e.message);
+                return;
+            }
+            if (!file || isClientRef(file)) {
+                alert('Audio upload failed. Please try selecting the file again.');
+                return;
+            }
         }
 
         const model = document.getElementById('postModel').value;
@@ -1623,7 +1808,7 @@
 
                 // Refresh transcriptions list
                 const folder = document.getElementById('postFolder').value;
-                if (folder) loadTranscriptions(folder);
+                if (folder && !isClientRef(folder)) loadTranscriptions(folder);
 
                 if (postEventSource) { postEventSource.close(); postEventSource = null; }
             } else if (data.status === 'error') {
@@ -1717,7 +1902,7 @@
             if (!folder) {
                 folder = document.getElementById('postFolder').value;
             }
-            if (!folder) return;
+            if (!folder || isClientRef(folder)) return;
 
             const resp = await fetch('/api/folder_transcriptions?folder=' + encodeURIComponent(folder));
             const files = await resp.json();
@@ -1842,10 +2027,26 @@
     let summaryFinalResult = '';  // Clean final result (no chunk progress noise)
 
     async function startSummarization() {
-        const file = document.getElementById('summaryFile').value;
+        const fileSel = document.getElementById('summaryFile');
+        let file = fileSel.value;
         if (!file) {
             alert('Select a transcription file first');
             return;
+        }
+
+        if (isClientRef(file) && clientFileRefs.summaryFile[file]) {
+            try {
+                const clientFile = await clientFileRefs.summaryFile[file].getFile();
+                await uploadFileObject(clientFile, 'summaryFile', 'transcription', false);
+                file = fileSel.value;
+            } catch (e) {
+                alert('Failed to load client file: ' + e.message);
+                return;
+            }
+            if (!file || isClientRef(file)) {
+                alert('Transcription upload failed. Please try selecting the file again.');
+                return;
+            }
         }
 
         const model = document.getElementById('summaryModel').value;
@@ -2149,7 +2350,6 @@
 
     // ---- Init ----
     loadSources();
-    loadAllFolders();
     checkPostStatus();
     initPersistence();
     updateLanguageForModel();
@@ -2169,6 +2369,8 @@
     if (savedSummaryFolder) {
         document.getElementById('summaryOutputFolder').value = savedSummaryFolder;
     }
+
+    loadAllFolders();
 
     // Load persisted theme
     const savedTheme = localStorage.getItem('cenario_theme');
