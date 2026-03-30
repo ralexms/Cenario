@@ -1245,9 +1245,11 @@
         const progressEl = document.getElementById(progressId);
         progressEl.textContent = 'Uploading ' + file.name + '...';
 
+        const uniqueFolder = 'client_upload_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         const formData = new FormData();
         formData.append('file', file);
         formData.append('type', type);
+        formData.append('folder', uniqueFolder);
 
         const resp = await fetch('/api/upload', { method: 'POST', body: formData });
         const data = await resp.json();
@@ -1725,13 +1727,19 @@
     // ---- Post-Processing ----
     async function startPostProcess() {
         const fileSel = document.getElementById('postFile');
+        const folderSel = document.getElementById('postFolder');
+        const selectedFolder = folderSel.value;
         let file = fileSel.value;
         if (!file) {
             alert('Select an audio file first');
             return;
         }
 
-        if (isClientRef(file) && clientFileRefs.postFile[file]) {
+        if (isClientRef(selectedFolder)) {
+            if (!isClientRef(file) || !clientFileRefs.postFile[file]) {
+                alert('Select an audio file from the chosen client folder before starting.');
+                return;
+            }
             try {
                 const clientFile = await clientFileRefs.postFile[file].getFile();
                 file = await uploadClientFileForProcessing(clientFile, 'audio', 'uploadPostProgress');
@@ -2103,13 +2111,19 @@
 
     async function startSummarization() {
         const fileSel = document.getElementById('summaryFile');
+        const folderSel = document.getElementById('summaryFolder');
+        const selectedFolder = folderSel.value;
         let file = fileSel.value;
         if (!file) {
             alert('Select a transcription file first');
             return;
         }
 
-        if (isClientRef(file) && clientFileRefs.summaryFile[file]) {
+        if (isClientRef(selectedFolder)) {
+            if (!isClientRef(file) || !clientFileRefs.summaryFile[file]) {
+                alert('Select a transcription file from the chosen client folder before starting.');
+                return;
+            }
             try {
                 const clientFile = await clientFileRefs.summaryFile[file].getFile();
                 file = await uploadClientFileForProcessing(clientFile, 'transcription', 'uploadSummaryProgress');

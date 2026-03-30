@@ -302,9 +302,12 @@ def api_upload():
     if ext not in allowed:
         return jsonify({'error': f'File type {ext} not allowed'}), 400
 
-    # Create a subfolder named after the file (without extension) to mirror
-    # the original folder structure from the client machine.
-    folder_name = os.path.splitext(safe_name)[0]
+    # Optional explicit folder key (used by client-side staging uploads).
+    folder_hint = secure_filename(request.form.get('folder', '').strip())
+
+    # Default behavior: create a subfolder named after the file (without extension)
+    # to mirror the original folder structure from the client machine.
+    folder_name = folder_hint or os.path.splitext(safe_name)[0]
     dest_dir = os.path.join(DATA_DIR, folder_name)
     os.makedirs(dest_dir, exist_ok=True)
 
