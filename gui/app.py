@@ -1443,6 +1443,7 @@ def _ensure_ssl_cert():
 
 
 if __name__ == '__main__':
+    host = os.environ.get('CENARIO_HOST', '0.0.0.0')
     port = int(os.environ.get('CENARIO_PORT', 5000))
     debug = os.environ.get('CENARIO_DEBUG', '0') == '1'
 
@@ -1455,5 +1456,5 @@ if __name__ == '__main__':
             webbrowser.open(f'https://localhost:{port}')
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True, use_reloader=False,
+    app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False,
             ssl_context=ssl_context)
