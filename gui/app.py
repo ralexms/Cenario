@@ -1186,43 +1186,139 @@ def _ensure_ssl_cert():
       2. cryptography library
       3. pyopenssl adhoc context (cert regenerated each restart)
     """
+    import ipaddress
     import socket
+    import ssl
     import subprocess
+
+    def _collect_tls_identities():
+        """Collect hostnames/IPs that clients may use to reach this server."""
+        dns_names = {'localhost'}
+        ip_values = {'127.0.0.1'}
+
+        # Include hostname aliases (helpful when clients use host name instead of IP)
+        hostname = socket.gethostname().strip()
+        fqdn = socket.getfqdn().strip()
+        if hostname:
+            dns_names.add(hostname)
+        if fqdn:
+            dns_names.add(fqdn)
+
+        # Resolve all discovered DNS names to IPs
+        for name in list(dns_names):
+            try:
+                infos = socket.getaddrinfo(name, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            except Exception:
+                continue
+            for info in infos:
+                raw = info[4][0]
+                try:
+                    ip_obj = ipaddress.ip_address(raw.split('%', 1)[0])  # strip zone id
+                    ip_values.add(str(ip_obj))
+                except ValueError:
+                    continue
+
+        # Fallback: collect interface addresses from common system commands.
+        for cmd in (['hostname', '-I'], ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global']):
+            try:
+                proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except Exception:
+                continue
+            text = proc.stdout.strip()
+            if not text:
+                continue
+            for token in text.replace('\n', ' ').split():
+                if '/' in token:
+                    token = token.split('/', 1)[0]
+                try:
+                    ip_values.add(str(ipaddress.ip_address(token)))
+                except ValueError:
+                    continue
+
+        # Probe likely outbound interfaces for additional LAN/VPN addresses.
+        for probe in ('8.8.8.8', '1.1.1.1'):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(0.5)
+                sock.connect((probe, 80))
+                ip_values.add(sock.getsockname()[0])
+            except Exception:
+                pass
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        # Allow manual SAN overrides (comma-separated DNS names and/or IPs)
+        extra = os.environ.get('CENARIO_TLS_EXTRA_SANS', '').strip()
+        if extra:
+            for item in (x.strip() for x in extra.split(',')):
+                if not item:
+                    continue
+                try:
+                    ip_values.add(str(ipaddress.ip_address(item)))
+                except ValueError:
+                    dns_names.add(item)
+
+        return sorted(dns_names), sorted(ip_values, key=lambda v: (':' in v, v))
+
+    def _cert_covers_identities(cert_file, expected_dns, expected_ips):
+        """Return True when cert SANs include all expected DNS/IP identities."""
+        try:
+            decoded = ssl._ssl._test_decode_cert(cert_file)  # stdlib parser
+        except Exception:
+            return False
+
+        sans = decoded.get('subjectAltName', [])
+        cert_dns = {value for kind, value in sans if kind == 'DNS'}
+        cert_ips = {value for kind, value in sans if kind == 'IP Address'}
+        return set(expected_dns).issubset(cert_dns) and set(expected_ips).issubset(cert_ips)
+
+    def _remove_partial_cert_files(cert_file, key_file):
+        for path in (cert_file, key_file):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+
 
     cert_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certs')
     cert_path = os.path.join(cert_dir, 'cert.pem')
     key_path  = os.path.join(cert_dir, 'key.pem')
 
+    dns_names, ip_values = _collect_tls_identities()
+    san_items = [f'DNS:{name}' for name in dns_names] + [f'IP:{ip}' for ip in ip_values]
+    san_addext = 'subjectAltName=' + ','.join(san_items)
+
     if os.path.exists(cert_path) and os.path.exists(key_path):
-        return cert_path, key_path
+        if _cert_covers_identities(cert_path, dns_names, ip_values):
+            return cert_path, key_path
+        print('Existing TLS cert SANs are stale; regenerating certificate...')
+        _remove_partial_cert_files(cert_path, key_path)
 
     os.makedirs(cert_dir, exist_ok=True)
 
-    # Detect local IP for SAN so browsers accept the cert when connecting remotely
-    local_ip = '127.0.0.1'
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        pass
-
     # --- Method 1: system openssl (most reliable, no Python deps) ---
     try:
-        san = f'subjectAltName=DNS:localhost,IP:127.0.0.1,IP:{local_ip}'
+        _remove_partial_cert_files(cert_path, key_path)
         subprocess.run(
             [
                 'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
                 '-keyout', key_path, '-out', cert_path,
                 '-days', '3650', '-nodes',
                 '-subj', '/CN=Cenario',
-                '-addext', san,
+                '-addext', san_addext,
+                '-addext', 'basicConstraints=critical,CA:FALSE',
+                '-addext', 'keyUsage=critical,digitalSignature,keyEncipherment',
+                '-addext', 'extendedKeyUsage=serverAuth',
             ],
             check=True, capture_output=True,
         )
         print(f'Generated self-signed certificate via openssl: {cert_path}')
-        print(f'SANs: localhost, 127.0.0.1, {local_ip}')
+        print('SANs: ' + ', '.join(dns_names + ip_values))
         return cert_path, key_path
     except Exception as e:
         print(f'openssl method failed ({e}), trying cryptography library...')
@@ -1230,17 +1326,18 @@ def _ensure_ssl_cert():
     # --- Method 2: cryptography library ---
     try:
         import datetime
-        import ipaddress
         from cryptography import x509
+        from cryptography.x509.oid import ExtendedKeyUsageOID
         from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
 
-        local_ips = {ipaddress.IPv4Address('127.0.0.1'), ipaddress.IPv4Address(local_ip)}
+        _remove_partial_cert_files(cert_path, key_path)
+        ip_objs = [ipaddress.ip_address(value) for value in ip_values]
         key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Cenario')])
         san = x509.SubjectAlternativeName(
-            [x509.DNSName('localhost')] + [x509.IPAddress(ip) for ip in local_ips]
+            [x509.DNSName(name) for name in dns_names] + [x509.IPAddress(ip) for ip in ip_objs]
         )
         cert = (
             x509.CertificateBuilder()
@@ -1249,6 +1346,22 @@ def _ensure_ssl_cert():
             .serial_number(x509.random_serial_number())
             .not_valid_before(datetime.datetime.utcnow())
             .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=3650))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=True,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
             .add_extension(san, critical=False)
             .sign(key, hashes.SHA256())
         )
@@ -1261,6 +1374,7 @@ def _ensure_ssl_cert():
                 serialization.NoEncryption(),
             ))
         print(f'Generated self-signed certificate via cryptography: {cert_path}')
+        print('SANs: ' + ', '.join(dns_names + ip_values))
         return cert_path, key_path
     except Exception as e:
         print(f'cryptography method failed ({e}), falling back to adhoc TLS...')
