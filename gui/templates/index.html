@@ -665,6 +665,7 @@
                 <div style="display:flex; gap:8px;">
                     <select id="postFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('postFile', 'audio')">Browse</button>
+                    <input type="file" id="uploadPostFile" accept=".wav,.mp3,.m4a,.flac,.ogg" style="display:none" onchange="uploadFile(this, 'postFile', 'audio')">
                 </div>
                 <div id="uploadPostProgress" class="info" style="margin-top:4px;"></div>
             </div>
@@ -794,6 +795,7 @@
                 <div style="display:flex; gap:8px;">
                     <select id="summaryFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('summaryFile', 'transcription')">Browse</button>
+                    <input type="file" id="uploadSummaryFile" accept=".json,.txt,.srt" style="display:none" onchange="uploadFile(this, 'summaryFile', 'transcription')">
                 </div>
                 <div id="uploadSummaryProgress" class="info" style="margin-top:4px;"></div>
             </div>
@@ -1041,21 +1043,9 @@
             } catch (e) {
                 if (e.name !== 'AbortError') console.error(e);
             }
-        } else {
-            // Fallback: server-side dialog (local use or unsupported browser)
-            fetch('/api/browse_folder')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.path) {
-                        document.getElementById(targetId).value = data.path;
-                        localStorage.setItem('cenario_' + targetId, data.path);
-                        if (targetId === 'outputFolder' || targetId === 'postOutputFolder' || targetId === 'summaryOutputFolder') {
-                            loadFolders(targetId);
-                        }
-                    }
-                })
-                .catch(err => console.error(err));
         }
+        // No fallback: without a secure context the API is unavailable.
+        // Exports will use triggerDownloads() (browser save dialogs) automatically.
     }
 
     // ---- Browse File ----
@@ -1072,28 +1062,18 @@
                 if (e.name !== 'AbortError') console.error(e);
             }
         } else {
-            // Fallback: server-side dialog (local use or unsupported browser)
-            fetch('/api/browse_file?type=' + type)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.path) {
-                        const sel = document.getElementById(targetId);
-                        let exists = false;
-                        for (let i = 0; i < sel.options.length; i++) {
-                            if (sel.options[i].value === data.path) { sel.selectedIndex = i; exists = true; break; }
-                        }
-                        if (!exists) {
-                            const opt = document.createElement('option');
-                            opt.value = data.path;
-                            opt.textContent = data.name + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '');
-                            sel.appendChild(opt);
-                            sel.value = data.path;
-                        }
-                        if (targetId === 'postFile') currentFile = data.path;
-                    }
-                })
-                .catch(err => console.error(err));
+            // Fallback: trigger a hidden <input type="file"> on the client (works over HTTP too)
+            const inputId = targetId === 'postFile' ? 'uploadPostFile' : 'uploadSummaryFile';
+            document.getElementById(inputId).click();
         }
+    }
+
+    // Hidden file input handler (fallback for non-secure contexts)
+    async function uploadFile(input, targetId, type) {
+        const file = input.files[0];
+        if (!file) return;
+        await uploadFileObject(file, targetId, type);
+        input.value = '';
     }
 
     // ---- Upload helpers ----
