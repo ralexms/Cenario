@@ -1251,6 +1251,36 @@ def _ensure_ssl_cert():
         except Exception:
             pass
 
+        # Tailscale: include tailnet IPs and DNS name when available.
+        for cmd in (['tailscale', 'ip', '-4'], ['tailscale', 'ip', '-6']):
+            try:
+                out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+            except Exception:
+                continue
+            for line in out.splitlines():
+                token = line.strip()
+                if not token:
+                    continue
+                try:
+                    ip_values.add(str(ipaddress.ip_address(token)))
+                except ValueError:
+                    continue
+
+        try:
+            out = subprocess.run(
+                ['tailscale', 'status', '--json'],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            status = json.loads(out)
+            self_data = status.get('Self', {})
+            dns_name = (self_data.get('DNSName') or '').strip().rstrip('.')
+            if dns_name:
+                dns_names.add(dns_name)
+        except Exception:
+            pass
+
         # Probe likely outbound interfaces for additional LAN/VPN addresses.
         for probe in ('8.8.8.8', '1.1.1.1'):
             try:
