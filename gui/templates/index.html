@@ -1041,16 +1041,36 @@
         return saved;
     }
 
-    // Trigger browser downloads for a list of server file paths
-    function triggerDownloads(serverFilePaths) {
+    // Trigger browser downloads for server files using fetch+blob.
+    // This is more reliable than direct link navigation behind self-signed HTTPS.
+    async function triggerDownloads(serverFilePaths) {
+        const downloaded = [];
+        const failed = [];
+
         for (const f of serverFilePaths) {
-            const a = document.createElement('a');
-            a.href = '/api/download?path=' + encodeURIComponent(f);
-            a.download = f.split('/').pop();
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            const filename = f.split('/').pop();
+            try {
+                const resp = await fetch('/api/download?path=' + encodeURIComponent(f));
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const blob = await resp.blob();
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+                downloaded.push(filename);
+            } catch (e) {
+                console.error('Download failed for', f, e);
+                failed.push(filename);
+            }
         }
+
+        return { downloaded, failed };
     }
 
     async function fetchServerFolders(base) {
@@ -1125,7 +1145,22 @@
                 clientDirHandles[targetId] = handle;
                 document.getElementById(targetId).value = handle.name;
                 localStorage.setItem('cenario_' + targetId, handle.name);
+
+                // Mirror main output folder choice to other tabs for a seamless client workflow.
+                if (targetId === 'outputFolder') {
+                    clientDirHandles.postOutputFolder = handle;
+                    clientDirHandles.summaryOutputFolder = handle;
+                    document.getElementById('postOutputFolder').value = handle.name;
+                    document.getElementById('summaryOutputFolder').value = handle.name;
+                    localStorage.setItem('cenario_postOutputFolder', handle.name);
+                    localStorage.setItem('cenario_summaryOutputFolder', handle.name);
+                }
+
                 await loadFolders(targetId);
+                if (targetId === 'outputFolder') {
+                    await loadFolders('postOutputFolder');
+                    await loadFolders('summaryOutputFolder');
+                }
             } catch (e) {
                 if (e.name !== 'AbortError') console.error(e);
             }
@@ -1648,8 +1683,15 @@
                 const saved = await saveToClientDir(dirHandle, data.files);
                 linksDiv.innerHTML = '<div class="success"><strong>Saved to ' + escapeHtml(dirHandle.name) + ':</strong><br>' + saved.map(escapeHtml).join('<br>') + '</div>';
             } else {
-                triggerDownloads(data.files);
-                linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + data.files.map(f => escapeHtml(f.split('/').pop())).join('<br>') + '</div>';
+                const result = await triggerDownloads(data.files);
+                if (result.failed.length) {
+                    linksDiv.innerHTML = '<div class="warning"><strong>Downloaded:</strong><br>' +
+                        result.downloaded.map(escapeHtml).join('<br>') +
+                        '<br><br><strong>Failed:</strong><br>' +
+                        result.failed.map(escapeHtml).join('<br>') + '</div>';
+                } else {
+                    linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + result.downloaded.map(escapeHtml).join('<br>') + '</div>';
+                }
             }
 
         } catch (e) {
@@ -1881,14 +1923,21 @@
                 }
             }
 
-            const dirHandle = clientDirHandles['postOutputFolder'];
+            const dirHandle = clientDirHandles['postOutputFolder'] || clientDirHandles['outputFolder'];
             if (dirHandle) {
                 linksDiv.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
                 const saved = await saveToClientDir(dirHandle, allFiles);
                 linksDiv.innerHTML = '<div class="success"><strong>Saved to ' + escapeHtml(dirHandle.name) + ':</strong><br>' + saved.map(escapeHtml).join('<br>') + '</div>';
             } else {
-                triggerDownloads(allFiles);
-                linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + allFiles.map(f => escapeHtml(f.split('/').pop())).join('<br>') + '</div>';
+                const result = await triggerDownloads(allFiles);
+                if (result.failed.length) {
+                    linksDiv.innerHTML = '<div class="warning"><strong>Downloaded:</strong><br>' +
+                        result.downloaded.map(escapeHtml).join('<br>') +
+                        '<br><br><strong>Failed:</strong><br>' +
+                        result.failed.map(escapeHtml).join('<br>') + '</div>';
+                } else {
+                    linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + result.downloaded.map(escapeHtml).join('<br>') + '</div>';
+                }
             }
 
         } catch (e) {
@@ -2164,14 +2213,19 @@
 
             if (resp.ok) {
                 const files = data.files || [data.file];
-                const dirHandle = clientDirHandles['summaryOutputFolder'];
+                const dirHandle = clientDirHandles['summaryOutputFolder'] || clientDirHandles['outputFolder'];
                 if (dirHandle) {
                     statusEl.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
                     const saved = await saveToClientDir(dirHandle, files);
                     statusEl.innerHTML = '<span class="success">Saved to ' + escapeHtml(dirHandle.name) + ': ' + saved.map(escapeHtml).join(', ') + '</span>';
                 } else {
-                    triggerDownloads(files);
-                    statusEl.innerHTML = '<span class="success">Downloading: ' + files.map(f => escapeHtml(f.split('/').pop())).join(', ') + '</span>';
+                    const result = await triggerDownloads(files);
+                    if (result.failed.length) {
+                        statusEl.innerHTML = '<span class="warning">Downloaded: ' + result.downloaded.map(escapeHtml).join(', ') +
+                            ' | Failed: ' + result.failed.map(escapeHtml).join(', ') + '</span>';
+                    } else {
+                        statusEl.innerHTML = '<span class="success">Downloading: ' + result.downloaded.map(escapeHtml).join(', ') + '</span>';
+                    }
                 }
             } else {
                 statusEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
