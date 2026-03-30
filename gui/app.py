@@ -1191,6 +1191,16 @@ def _ensure_ssl_cert():
     import ssl
     import subprocess
 
+    def _try_add_ip(ip_values, raw_ip):
+        try:
+            ip_obj = ipaddress.ip_address((raw_ip or '').split('%', 1)[0])
+        except ValueError:
+            return False
+        if ip_obj.is_multicast or ip_obj.is_unspecified:
+            return False
+        ip_values.add(str(ip_obj))
+        return True
+
     def _collect_tls_identities():
         """Collect hostnames/IPs that clients may use to reach this server."""
         dns_names = {'localhost'}
@@ -1212,14 +1222,14 @@ def _ensure_ssl_cert():
                 continue
             for info in infos:
                 raw = info[4][0]
-                try:
-                    ip_obj = ipaddress.ip_address(raw.split('%', 1)[0])  # strip zone id
-                    ip_values.add(str(ip_obj))
-                except ValueError:
-                    continue
+                _try_add_ip(ip_values, raw)
 
         # Fallback: collect interface addresses from common system commands.
-        for cmd in (['hostname', '-I'], ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global']):
+        for cmd in (
+            ['hostname', '-I'],
+            ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global'],
+            ['ip', '-o', '-6', 'addr', 'show', 'scope', 'global'],
+        ):
             try:
                 proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
             except Exception:
@@ -1227,13 +1237,21 @@ def _ensure_ssl_cert():
             text = proc.stdout.strip()
             if not text:
                 continue
-            for token in text.replace('\n', ' ').split():
-                if '/' in token:
-                    token = token.split('/', 1)[0]
-                try:
-                    ip_values.add(str(ipaddress.ip_address(token)))
-                except ValueError:
-                    continue
+            if cmd[:2] == ['hostname', '-I']:
+                for token in text.split():
+                    _try_add_ip(ip_values, token)
+            else:
+                for line in text.splitlines():
+                    fields = line.split()
+                    if 'inet' in fields:
+                        idx = fields.index('inet')
+                    elif 'inet6' in fields:
+                        idx = fields.index('inet6')
+                    else:
+                        continue
+                    if idx + 1 >= len(fields):
+                        continue
+                    _try_add_ip(ip_values, fields[idx + 1].split('/', 1)[0])
 
         # Capture active source IP from routing table (often the exact LAN IP clients use).
         try:
@@ -1247,7 +1265,7 @@ def _ensure_ssl_cert():
             if 'src' in fields:
                 idx = fields.index('src')
                 if idx + 1 < len(fields):
-                    ip_values.add(str(ipaddress.ip_address(fields[idx + 1])))
+                    _try_add_ip(ip_values, fields[idx + 1])
         except Exception:
             pass
 
@@ -1261,10 +1279,7 @@ def _ensure_ssl_cert():
                 token = line.strip()
                 if not token:
                     continue
-                try:
-                    ip_values.add(str(ipaddress.ip_address(token)))
-                except ValueError:
-                    continue
+                _try_add_ip(ip_values, token)
 
         try:
             out = subprocess.run(
@@ -1287,7 +1302,7 @@ def _ensure_ssl_cert():
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(0.5)
                 sock.connect((probe, 80))
-                ip_values.add(sock.getsockname()[0])
+                _try_add_ip(ip_values, sock.getsockname()[0])
             except Exception:
                 pass
             finally:
@@ -1302,9 +1317,7 @@ def _ensure_ssl_cert():
             for item in (x.strip() for x in extra.split(',')):
                 if not item:
                     continue
-                try:
-                    ip_values.add(str(ipaddress.ip_address(item)))
-                except ValueError:
+                if not _try_add_ip(ip_values, item):
                     dns_names.add(item)
 
         return sorted(dns_names), sorted(ip_values, key=lambda v: (':' in v, v))
