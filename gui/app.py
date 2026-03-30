@@ -1178,15 +1178,79 @@ def api_update_perform():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def _ensure_ssl_cert():
+    """Generate a persistent self-signed TLS certificate if one doesn't exist."""
+    import socket
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    cert_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certs')
+    cert_path = os.path.join(cert_dir, 'cert.pem')
+    key_path  = os.path.join(cert_dir, 'key.pem')
+
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        return cert_path, key_path
+
+    os.makedirs(cert_dir, exist_ok=True)
+
+    # Collect local IPs for SAN so browsers accept the cert when connecting remotely
+    local_ips = {ipaddress.IPv4Address('127.0.0.1')}
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        local_ips.add(ipaddress.IPv4Address(s.getsockname()[0]))
+        s.close()
+    except Exception:
+        pass
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Cenario')])
+    san = x509.SubjectAlternativeName(
+        [x509.DNSName('localhost')] + [x509.IPAddress(ip) for ip in local_ips]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=3650))
+        .add_extension(san, critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(cert_path, 'wb') as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(key_path, 'wb') as f:
+        f.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ))
+
+    print(f'Generated self-signed certificate: {cert_path}')
+    print(f'SANs: localhost, {", ".join(str(ip) for ip in local_ips)}')
+    return cert_path, key_path
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('CENARIO_PORT', 5000))
     debug = os.environ.get('CENARIO_DEBUG', '0') == '1'
+
+    cert_path, key_path = _ensure_ssl_cert()
 
     if not os.environ.get('CENARIO_NO_BROWSER'):
         def _open_browser():
             import time
             time.sleep(1.5)
-            webbrowser.open(f'http://localhost:{port}')
+            webbrowser.open(f'https://localhost:{port}')
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True, use_reloader=False,
+            ssl_context=(cert_path, key_path))
