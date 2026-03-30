@@ -665,8 +665,6 @@
                 <div style="display:flex; gap:8px;">
                     <select id="postFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('postFile', 'audio')">Browse</button>
-                    <button class="btn-action" onclick="document.getElementById('uploadPostFile').click()" title="Upload a file from your browser. Use this when accessing Cenario remotely from another machine.">Upload</button>
-                    <input type="file" id="uploadPostFile" accept=".wav,.mp3,.m4a,.flac,.ogg" style="display:none" onchange="uploadFile(this, 'postFile', 'audio')">
                 </div>
                 <div id="uploadPostProgress" class="info" style="margin-top:4px;"></div>
             </div>
@@ -796,8 +794,6 @@
                 <div style="display:flex; gap:8px;">
                     <select id="summaryFile" style="flex-grow:1;"><option value="">Select a folder first</option></select>
                     <button class="btn-action" onclick="browseFile('summaryFile', 'transcription')">Browse</button>
-                    <button class="btn-action" onclick="document.getElementById('uploadSummaryFile').click()" title="Upload a file from your browser. Use this when accessing Cenario remotely from another machine.">Upload</button>
-                    <input type="file" id="uploadSummaryFile" accept=".json,.txt,.srt" style="display:none" onchange="uploadFile(this, 'summaryFile', 'transcription')">
                 </div>
                 <div id="uploadSummaryProgress" class="info" style="margin-top:4px;"></div>
             </div>
@@ -876,7 +872,6 @@
         <div id="summaryOutput" class="output-area" style="height: 200px;"></div>
         <div style="margin-top:10px;">
              <button id="btnExportMd" class="btn-action" onclick="exportMarkdown()" disabled>Export as Markdown</button>
-             <button id="btnDownloadSummary" class="btn-action" onclick="downloadSummaryFiles()" disabled title="Download summary files to your browser. Use this when accessing Cenario remotely to get the files back to your machine.">Download Summary</button>
              <span id="exportMdStatus" class="info"></span>
         </div>
     </div>
@@ -999,59 +994,110 @@
         }
     }
 
+    // ---- Client directory handles (File System Access API) ----
+    // Keyed by folder input ID, stores FileSystemDirectoryHandle for client-side exports
+    const clientDirHandles = {};
+
+    // Fetch server-side files and write them into a client directory handle
+    async function saveToClientDir(dirHandle, serverFilePaths) {
+        const saved = [];
+        for (const serverPath of serverFilePaths) {
+            try {
+                const resp = await fetch('/api/download?path=' + encodeURIComponent(serverPath));
+                if (!resp.ok) continue;
+                const blob = await resp.blob();
+                const filename = serverPath.split('/').pop();
+                const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                saved.push(filename);
+            } catch (e) {
+                console.error('Failed to save ' + serverPath + ' to client dir:', e);
+            }
+        }
+        return saved;
+    }
+
+    // Trigger browser downloads for a list of server file paths
+    function triggerDownloads(serverFilePaths) {
+        for (const f of serverFilePaths) {
+            const a = document.createElement('a');
+            a.href = '/api/download?path=' + encodeURIComponent(f);
+            a.download = f.split('/').pop();
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    }
+
     // ---- Browse Folder ----
-    function browseFolder(targetId) {
-        fetch('/api/browse_folder')
-            .then(response => response.json())
-            .then(data => {
-                if (data.path) {
-                    document.getElementById(targetId).value = data.path;
-                    localStorage.setItem('cenario_' + targetId, data.path);
-                    if (targetId === 'outputFolder' || targetId === 'postOutputFolder' || targetId === 'summaryOutputFolder') {
-                        loadFolders(targetId);
+    async function browseFolder(targetId) {
+        if ('showDirectoryPicker' in window) {
+            try {
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                clientDirHandles[targetId] = handle;
+                document.getElementById(targetId).value = handle.name;
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+        } else {
+            // Fallback: server-side dialog (local use or unsupported browser)
+            fetch('/api/browse_folder')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.path) {
+                        document.getElementById(targetId).value = data.path;
+                        localStorage.setItem('cenario_' + targetId, data.path);
+                        if (targetId === 'outputFolder' || targetId === 'postOutputFolder' || targetId === 'summaryOutputFolder') {
+                            loadFolders(targetId);
+                        }
                     }
-                }
-            })
-            .catch(err => console.error(err));
+                })
+                .catch(err => console.error(err));
+        }
     }
 
     // ---- Browse File ----
-    function browseFile(targetId, type) {
-        fetch('/api/browse_file?type=' + type)
-            .then(response => response.json())
-            .then(data => {
-                if (data.path) {
-                    const sel = document.getElementById(targetId);
-                    // Check if option exists
-                    let exists = false;
-                    for (let i = 0; i < sel.options.length; i++) {
-                        if (sel.options[i].value === data.path) {
-                            sel.selectedIndex = i;
-                            exists = true;
-                            break;
+    async function browseFile(targetId, type) {
+        if ('showOpenFilePicker' in window) {
+            const types = type === 'audio'
+                ? [{ description: 'Audio Files', accept: { 'audio/*': ['.wav', '.mp3', '.m4a', '.flac', '.ogg'] } }]
+                : [{ description: 'Transcription Files', accept: { 'application/json': ['.json'], 'text/plain': ['.txt', '.srt'] } }];
+            try {
+                const [handle] = await window.showOpenFilePicker({ types, multiple: false });
+                const file = await handle.getFile();
+                await uploadFileObject(file, targetId, type);
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+        } else {
+            // Fallback: server-side dialog (local use or unsupported browser)
+            fetch('/api/browse_file?type=' + type)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.path) {
+                        const sel = document.getElementById(targetId);
+                        let exists = false;
+                        for (let i = 0; i < sel.options.length; i++) {
+                            if (sel.options[i].value === data.path) { sel.selectedIndex = i; exists = true; break; }
                         }
+                        if (!exists) {
+                            const opt = document.createElement('option');
+                            opt.value = data.path;
+                            opt.textContent = data.name + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '');
+                            sel.appendChild(opt);
+                            sel.value = data.path;
+                        }
+                        if (targetId === 'postFile') currentFile = data.path;
                     }
-                    if (!exists) {
-                        const opt = document.createElement('option');
-                        opt.value = data.path;
-                        opt.textContent = data.name + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '');
-                        sel.appendChild(opt);
-                        sel.value = data.path;
-                    }
-
-                    if (targetId === 'postFile') {
-                        currentFile = data.path;
-                    }
-                }
-            })
-            .catch(err => console.error(err));
+                })
+                .catch(err => console.error(err));
+        }
     }
 
-    // ---- Upload File (browser-based, for remote access) ----
-    async function uploadFile(input, targetId, type) {
-        const file = input.files[0];
-        if (!file) return;
-
+    // ---- Upload helpers ----
+    async function uploadFileObject(file, targetId, type) {
         const progressId = targetId === 'postFile' ? 'uploadPostProgress' : 'uploadSummaryProgress';
         const progressEl = document.getElementById(progressId);
         progressEl.textContent = 'Uploading ' + file.name + '...';
@@ -1061,10 +1107,7 @@
         formData.append('type', type);
 
         try {
-            const resp = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            });
+            const resp = await fetch('/api/upload', { method: 'POST', body: formData });
             const data = await resp.json();
 
             if (!resp.ok) {
@@ -1072,9 +1115,8 @@
                 return;
             }
 
-            progressEl.innerHTML = '<span class="success">Uploaded to ' + escapeHtml(data.path) + '</span>';
+            progressEl.innerHTML = '<span class="success">Uploaded: ' + escapeHtml(data.name) + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '') + '</span>';
 
-            // Add to select dropdown and select it
             const sel = document.getElementById(targetId);
             const opt = document.createElement('option');
             opt.value = data.path;
@@ -1082,39 +1124,12 @@
             sel.appendChild(opt);
             sel.value = data.path;
 
-            if (targetId === 'postFile') {
-                currentFile = data.path;
-            }
+            if (targetId === 'postFile') currentFile = data.path;
 
-            // Reload folders so the new folder appears in the dropdown
-            if (targetId === 'postFile') {
-                loadFolders();
-            } else {
-                loadFolders('summaryOutputFolder');
-            }
+            if (targetId === 'postFile') loadFolders();
+            else loadFolders('summaryOutputFolder');
         } catch (e) {
             progressEl.innerHTML = '<span class="error">Upload failed: ' + escapeHtml(e.message) + '</span>';
-        }
-
-        // Reset the input so the same file can be re-uploaded
-        input.value = '';
-    }
-
-    // ---- Download Summary Files ----
-    var lastExportedSummaryFiles = [];
-
-    async function downloadSummaryFiles() {
-        if (lastExportedSummaryFiles.length === 0) {
-            alert('Export the summary as Markdown first, then download.');
-            return;
-        }
-        for (const filePath of lastExportedSummaryFiles) {
-            const a = document.createElement('a');
-            a.href = '/api/download?path=' + encodeURIComponent(filePath);
-            a.download = '';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
         }
     }
 
@@ -1230,7 +1245,7 @@
     async function loadFolders(sourceId = 'outputFolder') {
         try {
             let outputFolder = 'recordings';
-            if (sourceId) {
+            if (sourceId && !clientDirHandles[sourceId]) {
                 outputFolder = document.getElementById(sourceId).value || 'recordings';
             }
 
@@ -1269,7 +1284,9 @@
         ];
         for (const { inputId, targetId } of sources) {
              try {
-                const outputFolder = document.getElementById(inputId).value || 'recordings';
+                const outputFolder = clientDirHandles[inputId]
+                    ? 'recordings'
+                    : (document.getElementById(inputId).value || 'recordings');
                 const resp = await fetch('/api/folders?base=' + encodeURIComponent(outputFolder));
                 const folders = await resp.json();
 
@@ -1475,8 +1492,15 @@
                 return;
             }
 
-            linksDiv.innerHTML = '<div class="success"><strong>Exported:</strong><br>' +
-                data.files.map(f => escapeHtml(f)).join('<br>') + '</div>';
+            const dirHandle = clientDirHandles['outputFolder'];
+            if (dirHandle) {
+                linksDiv.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
+                const saved = await saveToClientDir(dirHandle, data.files);
+                linksDiv.innerHTML = '<div class="success"><strong>Saved to ' + escapeHtml(dirHandle.name) + ':</strong><br>' + saved.map(escapeHtml).join('<br>') + '</div>';
+            } else {
+                triggerDownloads(data.files);
+                linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + data.files.map(f => escapeHtml(f.split('/').pop())).join('<br>') + '</div>';
+            }
 
         } catch (e) {
             linksDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
@@ -1692,8 +1716,15 @@
                 }
             }
 
-            linksDiv.innerHTML = '<div class="success"><strong>Exported:</strong><br>' +
-                allFiles.map(f => escapeHtml(f)).join('<br>') + '</div>';
+            const dirHandle = clientDirHandles['postOutputFolder'];
+            if (dirHandle) {
+                linksDiv.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
+                const saved = await saveToClientDir(dirHandle, allFiles);
+                linksDiv.innerHTML = '<div class="success"><strong>Saved to ' + escapeHtml(dirHandle.name) + ':</strong><br>' + saved.map(escapeHtml).join('<br>') + '</div>';
+            } else {
+                triggerDownloads(allFiles);
+                linksDiv.innerHTML = '<div class="success"><strong>Downloading:</strong><br>' + allFiles.map(f => escapeHtml(f.split('/').pop())).join('<br>') + '</div>';
+            }
 
         } catch (e) {
             linksDiv.innerHTML = '<span class="error">Error: ' + escapeHtml(e.message) + '</span>';
@@ -1858,8 +1889,6 @@
         btn.disabled = true;
         btnStop.disabled = false;
         btnExport.disabled = true;
-        document.getElementById('btnDownloadSummary').disabled = true;
-        lastExportedSummaryFiles = [];
         document.getElementById('exportMdStatus').textContent = '';
 
         try {
@@ -1954,9 +1983,15 @@
 
             if (resp.ok) {
                 const files = data.files || [data.file];
-                lastExportedSummaryFiles = files;
-                document.getElementById('btnDownloadSummary').disabled = false;
-                statusEl.innerHTML = '<span class="success">Saved to:<br>' + files.map(f => escapeHtml(f)).join('<br>') + '</span>';
+                const dirHandle = clientDirHandles['summaryOutputFolder'];
+                if (dirHandle) {
+                    statusEl.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
+                    const saved = await saveToClientDir(dirHandle, files);
+                    statusEl.innerHTML = '<span class="success">Saved to ' + escapeHtml(dirHandle.name) + ': ' + saved.map(escapeHtml).join(', ') + '</span>';
+                } else {
+                    triggerDownloads(files);
+                    statusEl.innerHTML = '<span class="success">Downloading: ' + files.map(f => escapeHtml(f.split('/').pop())).join(', ') + '</span>';
+                }
             } else {
                 statusEl.innerHTML = '<span class="error">' + escapeHtml(data.error) + '</span>';
             }
