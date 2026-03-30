@@ -1235,6 +1235,22 @@ def _ensure_ssl_cert():
                 except ValueError:
                     continue
 
+        # Capture active source IP from routing table (often the exact LAN IP clients use).
+        try:
+            route = subprocess.run(
+                ['ip', 'route', 'get', '1.1.1.1'],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            fields = route.replace('\n', ' ').split()
+            if 'src' in fields:
+                idx = fields.index('src')
+                if idx + 1 < len(fields):
+                    ip_values.add(str(ipaddress.ip_address(fields[idx + 1])))
+        except Exception:
+            pass
+
         # Probe likely outbound interfaces for additional LAN/VPN addresses.
         for probe in ('8.8.8.8', '1.1.1.1'):
             try:
