@@ -902,6 +902,7 @@
     let postEventSource = null;
     let summaryEventSource = null;
     let postDuration = 0;
+    let currentSummaryFile = null;
 
     // ---- Theme ----
     function changeTheme(theme) {
@@ -1237,6 +1238,28 @@
         } catch (e) {
             progressEl.innerHTML = '<span class="error">Upload failed: ' + escapeHtml(e.message) + '</span>';
         }
+    }
+
+    // Upload a client-selected file for immediate processing and return server path.
+    async function uploadClientFileForProcessing(file, type, progressId) {
+        const progressEl = document.getElementById(progressId);
+        progressEl.textContent = 'Uploading ' + file.name + '...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('type', type);
+
+        const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (!resp.ok) {
+            const message = data.error || 'Upload failed';
+            progressEl.innerHTML = '<span class="error">' + escapeHtml(message) + '</span>';
+            throw new Error(message);
+        }
+
+        progressEl.innerHTML = '<span class="success">Uploaded for processing: ' +
+            escapeHtml(data.name) + (data.size_mb ? ' (' + data.size_mb + ' MB)' : '') + '</span>';
+        return data.path;
     }
 
     // ---- Sources ----
@@ -1711,13 +1734,12 @@
         if (isClientRef(file) && clientFileRefs.postFile[file]) {
             try {
                 const clientFile = await clientFileRefs.postFile[file].getFile();
-                await uploadFileObject(clientFile, 'postFile', 'audio', false);
-                file = fileSel.value;
+                file = await uploadClientFileForProcessing(clientFile, 'audio', 'uploadPostProgress');
             } catch (e) {
                 alert('Failed to load client file: ' + e.message);
                 return;
             }
-            if (!file || isClientRef(file)) {
+            if (!file) {
                 alert('Audio upload failed. Please try selecting the file again.');
                 return;
             }
@@ -1886,7 +1908,8 @@
     // ---- Export ----
     async function exportFiles() {
         const fileSel = document.getElementById('postFile');
-        const file = fileSel.value || currentFile;
+        const selectedValue = fileSel.value;
+        const file = (selectedValue && !isClientRef(selectedValue)) ? selectedValue : currentFile;
         if (!file) return;
 
         const checkboxes = document.querySelectorAll('.exportFmt:checked');
@@ -1923,7 +1946,10 @@
                 }
             }
 
-            const dirHandle = clientDirHandles['postOutputFolder'] || clientDirHandles['outputFolder'];
+            const selectedFolder = document.getElementById('postFolder').value;
+            const dirHandle = (isClientRef(selectedFolder) && clientFolderRefs.postFolder[selectedFolder])
+                ? clientFolderRefs.postFolder[selectedFolder]
+                : (clientDirHandles['postOutputFolder'] || clientDirHandles['outputFolder']);
             if (dirHandle) {
                 linksDiv.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
                 const saved = await saveToClientDir(dirHandle, allFiles);
@@ -2086,13 +2112,12 @@
         if (isClientRef(file) && clientFileRefs.summaryFile[file]) {
             try {
                 const clientFile = await clientFileRefs.summaryFile[file].getFile();
-                await uploadFileObject(clientFile, 'summaryFile', 'transcription', false);
-                file = fileSel.value;
+                file = await uploadClientFileForProcessing(clientFile, 'transcription', 'uploadSummaryProgress');
             } catch (e) {
                 alert('Failed to load client file: ' + e.message);
                 return;
             }
-            if (!file || isClientRef(file)) {
+            if (!file) {
                 alert('Transcription upload failed. Please try selecting the file again.');
                 return;
             }
@@ -2120,6 +2145,7 @@
         btnStop.disabled = false;
         btnExport.disabled = true;
         document.getElementById('exportMdStatus').textContent = '';
+        currentSummaryFile = file;
 
         try {
             const resp = await fetch('/api/summarize/start', {
@@ -2198,7 +2224,8 @@
 
     async function exportMarkdown() {
         const text = summaryFinalResult || document.getElementById('summaryOutput').textContent;
-        const file = document.getElementById('summaryFile').value;
+        const selectedFile = document.getElementById('summaryFile').value;
+        const file = (selectedFile && !isClientRef(selectedFile)) ? selectedFile : currentSummaryFile;
         const statusEl = document.getElementById('exportMdStatus');
 
         if (!text) return;
@@ -2213,7 +2240,10 @@
 
             if (resp.ok) {
                 const files = data.files || [data.file];
-                const dirHandle = clientDirHandles['summaryOutputFolder'] || clientDirHandles['outputFolder'];
+                const selectedFolder = document.getElementById('summaryFolder').value;
+                const dirHandle = (isClientRef(selectedFolder) && clientFolderRefs.summaryFolder[selectedFolder])
+                    ? clientFolderRefs.summaryFolder[selectedFolder]
+                    : (clientDirHandles['summaryOutputFolder'] || clientDirHandles['outputFolder']);
                 if (dirHandle) {
                     statusEl.innerHTML = '<span class="info">Saving to ' + escapeHtml(dirHandle.name) + '...</span>';
                     const saved = await saveToClientDir(dirHandle, files);
