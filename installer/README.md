@@ -116,6 +116,8 @@ The installer automatically detects your NVIDIA GPU's CUDA version via `nvidia-s
 
 PyTorch pip wheels bundle their own CUDA runtime, so you do **not** need the CUDA toolkit installed.
 
+On Linux ARM64 with an NVIDIA GPU, the installer may additionally build a local CUDA-enabled `ctranslate2` from source when the published wheel is CPU-only on that machine. That fallback requires `git`, `cmake`, `make`, and `nvcc`, and the first install can take noticeably longer.
+
 ## Updating
 
 Re-running the installer updates the application code and dependencies while preserving your `models/`, `data/`, and `.env`:
@@ -157,6 +159,8 @@ PY
 If `torch.cuda.is_available()` is `True` but `ctranslate2.get_cuda_device_count()` is `0`, faster-whisper will run on CPU until `ctranslate2` is rebuilt or replaced with a CUDA-enabled build for that machine.
 
 As of April 9, 2026, the CTranslate2 4.7.1 installation docs still describe GPU wheels in terms of CUDA 12.x and cuDNN 8. A CUDA 13-capable driver alone does not make a CPU-only `ctranslate2` wheel use the GPU.
+
+The Linux installer now attempts that rebuild automatically on ARM64 when it detects this exact failure. If the automatic rebuild cannot run, check that `git`, `cmake`, `make`, and `nvcc` are available in your shell.
 
 **bitsandbytes errors on Windows** — 4-bit LLM quantization has limited Windows support. Use 8-bit or disable quantization in the summarization settings.
 

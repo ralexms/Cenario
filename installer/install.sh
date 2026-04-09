@@ -39,6 +39,178 @@ info()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $*"; exit 1; }
 ARCH="$(uname -m)"
+CT2_VERSION="4.7.1"
+
+run_whisper_gpu_validation() {
+    local extra_lib_path="${1:-}"
+    local status=0
+    local output
+    output=$(LD_LIBRARY_PATH="${extra_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$PYTHON_VENV" - <<'PY'
+import sys
+
+import ctranslate2
+import torch
+
+print(f"torch.cuda.is_available()={torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    try:
+        print(f"torch.cuda.get_device_name(0)={torch.cuda.get_device_name(0)}")
+    except Exception as exc:
+        print(f"torch.cuda.get_device_name(0) failed: {exc}")
+    try:
+        capability = torch.cuda.get_device_capability(0)
+        print(f"torch.cuda.get_device_capability(0)={capability}")
+    except Exception as exc:
+        capability = None
+        print(f"torch.cuda.get_device_capability(0) failed: {exc}")
+    try:
+        arch_list = torch.cuda.get_arch_list()
+    except Exception as exc:
+        arch_list = []
+        print(f"torch.cuda.get_arch_list() failed: {exc}")
+    else:
+        print(f"torch.cuda.get_arch_list()={arch_list}")
+
+    if capability is not None:
+        major, minor = capability
+        exact_arch = f"sm_{major}{minor}"
+        binary_compatible_arch = f"sm_{major}0"
+        if exact_arch not in arch_list and binary_compatible_arch not in arch_list:
+            print(
+                "PyTorch CUDA arch mismatch: "
+                f"GPU requires {exact_arch}, installed wheel provides {arch_list}"
+            )
+            sys.exit(3)
+
+ct2_cuda_count = ctranslate2.get_cuda_device_count()
+print(f"ctranslate2.get_cuda_device_count()={ct2_cuda_count}")
+
+if torch.cuda.is_available() and ct2_cuda_count == 0:
+    sys.exit(2)
+PY
+) || status=$?
+    printf '%s\n' "$output"
+    return "$status"
+}
+
+build_openblas_for_ct2() {
+    local prefix="$1"
+    local workdir="$2"
+
+    if [[ -f "$prefix/lib/libopenblas.a" && -f "$prefix/include/cblas.h" ]]; then
+        info "Reusing local OpenBLAS build at $prefix"
+        return
+    fi
+
+    info "Building OpenBLAS for local CTranslate2 build..."
+    rm -rf "$prefix" "$workdir/OpenBLAS-0.3.26" "$workdir/openblas.tar.gz"
+    mkdir -p "$prefix"
+    curl -L -o "$workdir/openblas.tar.gz" \
+        https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26.tar.gz || return 1
+    tar -xzf "$workdir/openblas.tar.gz" -C "$workdir" || return 1
+    (
+        cd "$workdir/OpenBLAS-0.3.26"
+        make -j"$(nproc)" TARGET=ARMV8 NO_SHARED=1 BUILD_SINGLE=1 NO_LAPACK=1 ONLY_CBLAS=1 USE_OPENMP=1 &&
+        make PREFIX="$prefix" install NO_SHARED=1
+    ) || return 1
+}
+
+rebuild_ct2_with_cuda() {
+    local ct2_root="$1"
+    local build_root="$2"
+    local source_dir="$build_root/CTranslate2"
+    local openblas_root="$build_root/openblas"
+    local major minor
+    local nvcc_flags
+    local target_ct2_lib
+    local backup_ct2_lib
+    local rebuilt_ct2_lib="$ct2_root/lib/libctranslate2.so.$CT2_VERSION"
+
+    if ! command -v git &>/dev/null; then
+        warn "Cannot rebuild CTranslate2 with CUDA because git is not installed."
+        return 1
+    fi
+    if ! command -v nvcc &>/dev/null; then
+        warn "Cannot rebuild CTranslate2 with CUDA because nvcc is not installed."
+        return 1
+    fi
+    if ! command -v cmake &>/dev/null; then
+        warn "Cannot rebuild CTranslate2 with CUDA because cmake is not installed."
+        return 1
+    fi
+    if ! command -v make &>/dev/null; then
+        warn "Cannot rebuild CTranslate2 with CUDA because make is not installed."
+        return 1
+    fi
+
+    info "Preparing local CUDA-enabled CTranslate2 build..."
+    mkdir -p "$build_root"
+    if [[ ! -f "$rebuilt_ct2_lib" ]]; then
+        build_openblas_for_ct2 "$openblas_root" "$build_root" || return 1
+
+        read -r major minor < <("$PYTHON_VENV" - <<'PY'
+import torch
+major, minor = torch.cuda.get_device_capability(0)
+print(major, minor)
+PY
+        )
+        nvcc_flags="-Xfatbin=-compress-all;-gencode=arch=compute_${major}${minor},code=sm_${major}${minor};-gencode=arch=compute_${major}${minor},code=compute_${major}${minor}"
+
+        rm -rf "$source_dir"
+        git clone --depth 1 --branch "v$CT2_VERSION" --recursive https://github.com/OpenNMT/CTranslate2.git "$source_dir" || return 1
+
+        rm -rf "$source_dir/build-release" "$ct2_root"
+        cmake -S "$source_dir" -B "$source_dir/build-release" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$ct2_root" \
+            -DBUILD_CLI=OFF \
+            -DWITH_MKL=OFF \
+            -DWITH_OPENBLAS=ON \
+            -DWITH_RUY=ON \
+            -DOPENMP_RUNTIME=COMP \
+            -DCMAKE_PREFIX_PATH="$openblas_root" \
+            -DWITH_CUDA=ON \
+            -DWITH_CUDNN=OFF \
+            -DCUDA_DYNAMIC_LOADING=ON \
+            -DCUDA_NVCC_FLAGS="$nvcc_flags" || return 1
+        cmake --build "$source_dir/build-release" -j"$(nproc)" || return 1
+        cmake --install "$source_dir/build-release" || return 1
+        rm -rf "$source_dir"
+    else
+        info "Reusing previously built CUDA-enabled CTranslate2 library at $rebuilt_ct2_lib"
+    fi
+    if [[ ! -f "$rebuilt_ct2_lib" ]]; then
+        warn "Local CTranslate2 build completed but the rebuilt shared library was not found at $rebuilt_ct2_lib."
+        return 1
+    fi
+
+    target_ct2_lib=$("$PYTHON_VENV" - <<'PY'
+import pathlib
+import ctranslate2
+
+libs_dir = pathlib.Path(ctranslate2.__file__).resolve().parent.parent / "ctranslate2.libs"
+matches = sorted(path for path in libs_dir.glob("libctranslate2*.so*") if path.is_file())
+if not matches:
+    raise SystemExit("No ctranslate2 shared library was found in site-packages.")
+print(matches[0])
+PY
+)
+    backup_ct2_lib="${target_ct2_lib}.cpu_backup"
+    if [[ ! -f "$backup_ct2_lib" ]]; then
+        cp "$target_ct2_lib" "$backup_ct2_lib"
+    fi
+
+    info "Replacing the wheel-provided CTranslate2 shared library with the local CUDA-enabled build..."
+    cp "$rebuilt_ct2_lib" "$target_ct2_lib"
+
+    info "Validating rebuilt CTranslate2 CUDA support..."
+    if ! run_whisper_gpu_validation; then
+        warn "Local CTranslate2 rebuild finished, but CUDA validation still failed."
+        return 1
+    fi
+
+    return 0
+}
 
 # ---- Check Python ----
 PYTHON=""
@@ -148,59 +320,25 @@ if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
     warn "If Whisper later reports 'This CTranslate2 package was not compiled with CUDA support', transcription will run on CPU until ctranslate2 is rebuilt or replaced with a CUDA-enabled build on that machine."
 fi
 
+CT2_LOCAL_ROOT="$INSTALL_DIR/ctranslate2"
+
 if [[ "$TORCH_INDEX" != "cpu" ]]; then
     info "Validating Whisper GPU support..."
     CT2_VALIDATE_STATUS=0
-    CT2_VALIDATE_OUTPUT=$("$PYTHON_VENV" - <<'PY'
-import sys
-
-import ctranslate2
-import torch
-
-print(f"torch.cuda.is_available()={torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    try:
-        print(f"torch.cuda.get_device_name(0)={torch.cuda.get_device_name(0)}")
-    except Exception as exc:
-        print(f"torch.cuda.get_device_name(0) failed: {exc}")
-    try:
-        capability = torch.cuda.get_device_capability(0)
-        print(f"torch.cuda.get_device_capability(0)={capability}")
-    except Exception as exc:
-        capability = None
-        print(f"torch.cuda.get_device_capability(0) failed: {exc}")
-    try:
-        arch_list = torch.cuda.get_arch_list()
-    except Exception as exc:
-        arch_list = []
-        print(f"torch.cuda.get_arch_list() failed: {exc}")
-    else:
-        print(f"torch.cuda.get_arch_list()={arch_list}")
-
-    if capability is not None:
-        major, minor = capability
-        exact_arch = f"sm_{major}{minor}"
-        binary_compatible_arch = f"sm_{major}0"
-        if exact_arch not in arch_list and binary_compatible_arch not in arch_list:
-            print(
-                "PyTorch CUDA arch mismatch: "
-                f"GPU requires {exact_arch}, installed wheel provides {arch_list}"
-            )
-            sys.exit(3)
-
-ct2_cuda_count = ctranslate2.get_cuda_device_count()
-print(f"ctranslate2.get_cuda_device_count()={ct2_cuda_count}")
-
-if torch.cuda.is_available() and ct2_cuda_count == 0:
-    sys.exit(2)
-PY
-) || CT2_VALIDATE_STATUS=$?
-    printf '%s\n' "$CT2_VALIDATE_OUTPUT"
+    run_whisper_gpu_validation || CT2_VALIDATE_STATUS=$?
 
     if [[ "$CT2_VALIDATE_STATUS" -eq 2 ]]; then
         warn "PyTorch can see an NVIDIA GPU, but CTranslate2 cannot. faster-whisper will fall back to CPU."
         warn "This usually means the installed ctranslate2 wheel is CPU-only on this machine, even though CUDA is present."
-        warn "CTranslate2 4.7.1 documents GPU wheels for CUDA 12.x, so CUDA-enabled PyTorch alone is not sufficient for faster-whisper."
+        warn "CTranslate2 $CT2_VERSION does not ship a usable ARM64 GPU wheel for this setup, so the installer will try a local source build."
+
+        if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+            if rebuild_ct2_with_cuda "$CT2_LOCAL_ROOT" "$INSTALL_DIR/build/ctranslate2"; then
+                info "CTranslate2 was rebuilt locally with CUDA support."
+            else
+                warn "Falling back to the pip-installed CTranslate2 package."
+            fi
+        fi
     elif [[ "$CT2_VALIDATE_STATUS" -eq 3 ]]; then
         warn "PyTorch can see the GPU, but the installed wheel does not include kernels for this CUDA architecture."
         warn "Reinstall torch/torchaudio from a newer PyTorch CUDA index that supports the GPU, then rerun the installer validation."
