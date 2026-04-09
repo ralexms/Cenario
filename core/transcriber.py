@@ -9,10 +9,33 @@ import time
 import difflib
 import re
 import shutil
+import platform
 
 
 # Directory for caching CTranslate2-converted models
 _CT2_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "cenario", "ct2-models")
+
+
+def _augment_ct2_load_error(error):
+    """Add actionable hints for common CTranslate2 CUDA packaging failures."""
+    message = str(error)
+    if "not compiled with CUDA support" not in message:
+        return message
+
+    hints = [
+        "The installed CTranslate2 binary is CPU-only, so Whisper cannot use the NVIDIA GPU."
+    ]
+
+    machine = platform.machine().lower()
+    if machine in {"aarch64", "arm64"}:
+        hints.append(
+            "On Linux ARM64/AArch64 systems, pip can install a CPU-only CTranslate2 wheel even when CUDA is available."
+        )
+
+    hints.append(
+        "This needs a CUDA-enabled CTranslate2 build on the target machine; changing the selected compute type will not fix it."
+    )
+    return f"{message} {' '.join(hints)}"
 
 
 def _ensure_ct2_model(model_id):
@@ -200,10 +223,10 @@ class Transcriber:
         # Convert HuggingFace models to CTranslate2 format if needed
         model_path = _ensure_ct2_model(model_size)
 
-        # Try loading with fallback: chosen compute -> cuda/int8 -> cpu/int8
+        # Try loading with fallback: chosen compute -> cuda/int8_float16 -> cpu/int8
         attempts = [(self.device, self.compute_type)]
-        if self.device == "cuda" and self.compute_type != "int8":
-            attempts.append(("cuda", "int8"))
+        if self.device == "cuda" and self.compute_type != "int8_float16":
+            attempts.append(("cuda", "int8_float16"))
         if self.device == "cuda":
             attempts.append(("cpu", "int8"))
 
@@ -221,7 +244,7 @@ class Transcriber:
                 print(f"Model '{model_size}' loaded on {device} with {compute_type}")
                 return
             except ValueError as e:
-                print(f"Failed ({device}/{compute_type}): {e}")
+                print(f"Failed ({device}/{compute_type}): {_augment_ct2_load_error(e)}")
                 continue
 
         raise RuntimeError(f"Could not load Whisper model '{model_size}' with any device/compute combination")

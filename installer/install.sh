@@ -38,6 +38,7 @@ done
 info()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $*"; exit 1; }
+ARCH="$(uname -m)"
 
 # ---- Check Python ----
 PYTHON=""
@@ -54,6 +55,7 @@ for cmd in python3.12 python3.11 python3.10 python3; do
 done
 [[ -z "$PYTHON" ]] && error "Python >= 3.10 not found. Install Python 3.10+ and try again."
 info "Using Python: $PYTHON ($("$PYTHON" --version))"
+info "Detected architecture: $ARCH"
 
 # ---- Check for venv module ----
 if ! "$PYTHON" -c "import venv" &>/dev/null; then
@@ -134,6 +136,11 @@ fi
 # ---- Install remaining dependencies ----
 info "Installing dependencies..."
 "$PIP" install -r "$REPO_DIR/installer/requirements-pip.txt" --quiet
+
+if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+    warn "Linux ARM64 detected. The prebuilt ctranslate2 wheel installed by pip can be CPU-only on this architecture."
+    warn "If Whisper later reports 'This CTranslate2 package was not compiled with CUDA support', transcription will run on CPU until ctranslate2 is rebuilt or replaced with a CUDA-enabled build on that machine."
+fi
 
 # ---- Install bitsandbytes ----
 info "Installing bitsandbytes..."
