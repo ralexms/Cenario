@@ -33,6 +33,9 @@ def _augment_ct2_load_error(error):
         )
 
     hints.append(
+        "If torch can see the GPU but CTranslate2 still reports zero CUDA devices, the installed CTranslate2 wheel is the problem rather than the selected Whisper compute type."
+    )
+    hints.append(
         "This needs a CUDA-enabled CTranslate2 build on the target machine; changing the selected compute type will not fix it."
     )
     return f"{message} {' '.join(hints)}"

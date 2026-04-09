@@ -106,6 +106,9 @@ The installer automatically detects your NVIDIA GPU's CUDA version via `nvidia-s
 
 | CUDA Version | PyTorch Index |
 |---|---|
+| >= 13.0 | cu130 |
+| >= 12.8 | cu128 |
+| >= 12.6 | cu126 |
 | >= 12.4 | cu124 |
 | >= 12.1 | cu121 |
 | >= 11.8 | cu118 |
@@ -132,6 +135,28 @@ bash installer/install.sh --install-dir ~/cenario
 **"parec not found"** — Install PulseAudio utilities: `sudo apt install pulseaudio-utils`
 
 **No GPU detected despite having NVIDIA GPU** — Ensure NVIDIA drivers are installed and `nvidia-smi` works from your terminal.
+
+**PyTorch warns that your GPU compute capability is unsupported** — Example: `NVIDIA GB10 with CUDA capability sm_121 is not compatible with the current PyTorch installation`. This means the installed torch wheel is too old for that GPU architecture. Reinstall `torch` and `torchaudio` from a newer PyTorch CUDA index.
+
+As of April 9, 2026, the official PyTorch install matrix includes CUDA 12.8 and 13.0 wheels for recent releases, and PyTorch 2.7 introduced Blackwell support.
+
+**Whisper says `This CTranslate2 package was not compiled with CUDA support` on Linux ARM64/AArch64** — This is usually not a model setting issue. On ARM64, `pip install ctranslate2` can still produce a CPU-only wheel even when `torch` can see the GPU.
+
+Validate the installed stack from the Cenario venv:
+
+```bash
+~/cenario/venv/bin/python - <<'PY'
+import ctranslate2, torch
+print("torch.cuda.is_available() =", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("torch.cuda.get_device_name(0) =", torch.cuda.get_device_name(0))
+print("ctranslate2.get_cuda_device_count() =", ctranslate2.get_cuda_device_count())
+PY
+```
+
+If `torch.cuda.is_available()` is `True` but `ctranslate2.get_cuda_device_count()` is `0`, faster-whisper will run on CPU until `ctranslate2` is rebuilt or replaced with a CUDA-enabled build for that machine.
+
+As of April 9, 2026, the CTranslate2 4.7.1 installation docs still describe GPU wheels in terms of CUDA 12.x and cuDNN 8. A CUDA 13-capable driver alone does not make a CPU-only `ctranslate2` wheel use the GPU.
 
 **bitsandbytes errors on Windows** — 4-bit LLM quantization has limited Windows support. Use 8-bit or disable quantization in the summarization settings.
 

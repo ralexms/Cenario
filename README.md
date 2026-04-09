@@ -127,6 +127,7 @@ You can also run Cenario from the terminal.
 ## Troubleshooting
 
 *   **CUDA Out of Memory**: If you encounter OOM errors during summarization, try selecting the **0.5B** model, enabling 4-bit quantization, or closing other GPU-intensive applications. The application attempts to handle this gracefully by unloading models when not in use.
+*   **PyTorch warns that your GPU compute capability is unsupported**: If PyTorch reports that your GPU architecture is not supported by the installed wheel, GPU acceleration will not work reliably even when `torch.cuda.is_available()` is `True`. Reinstall `torch` and `torchaudio` from a newer PyTorch CUDA index that supports the GPU architecture.
 *   **Whisper falls back to CPU with `This CTranslate2 package was not compiled with CUDA support`**: This means the installed `ctranslate2` package itself was built without CUDA support, so `faster-whisper` cannot use the GPU. On Linux ARM64/AArch64 systems this can happen even when NVIDIA CUDA is present. In that case you need a CUDA-enabled `ctranslate2` build on the target machine; selecting a different Whisper compute type will not fix it.
 *   **Audio Sources (Linux)**: If you don't see your monitor source, ensure you are using PulseAudio or PipeWire and that your recording device is set to "Monitor of..." in your system sound settings.
 *   **Audio Sources (Windows)**: System audio capture uses WASAPI loopback. If loopback recording fails, ensure your output device supports shared mode. The default output device is auto-selected.

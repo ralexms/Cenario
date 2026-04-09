@@ -75,7 +75,13 @@ if [[ "$CPU_ONLY" -eq 0 ]] && command -v nvidia-smi &>/dev/null; then
     if [[ -n "$CUDA_VER" ]]; then
         CUDA_MAJOR="${CUDA_VER%%.*}"
         CUDA_MINOR="${CUDA_VER##*.}"
-        if [[ "$CUDA_MAJOR" -gt 12 ]] || [[ "$CUDA_MAJOR" -eq 12 && "$CUDA_MINOR" -ge 4 ]]; then
+        if [[ "$CUDA_MAJOR" -ge 13 ]]; then
+            TORCH_INDEX="cu130"
+        elif [[ "$CUDA_MAJOR" -eq 12 && "$CUDA_MINOR" -ge 8 ]]; then
+            TORCH_INDEX="cu128"
+        elif [[ "$CUDA_MAJOR" -eq 12 && "$CUDA_MINOR" -ge 6 ]]; then
+            TORCH_INDEX="cu126"
+        elif [[ "$CUDA_MAJOR" -eq 12 && "$CUDA_MINOR" -ge 4 ]]; then
             TORCH_INDEX="cu124"
         elif [[ "$CUDA_MAJOR" -eq 12 && "$CUDA_MINOR" -ge 1 ]]; then
             TORCH_INDEX="cu121"
@@ -140,6 +146,65 @@ info "Installing dependencies..."
 if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
     warn "Linux ARM64 detected. The prebuilt ctranslate2 wheel installed by pip can be CPU-only on this architecture."
     warn "If Whisper later reports 'This CTranslate2 package was not compiled with CUDA support', transcription will run on CPU until ctranslate2 is rebuilt or replaced with a CUDA-enabled build on that machine."
+fi
+
+if [[ "$TORCH_INDEX" != "cpu" ]]; then
+    info "Validating Whisper GPU support..."
+    CT2_VALIDATE_STATUS=0
+    CT2_VALIDATE_OUTPUT=$("$PYTHON_VENV" - <<'PY'
+import sys
+
+import ctranslate2
+import torch
+
+print(f"torch.cuda.is_available()={torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    try:
+        print(f"torch.cuda.get_device_name(0)={torch.cuda.get_device_name(0)}")
+    except Exception as exc:
+        print(f"torch.cuda.get_device_name(0) failed: {exc}")
+    try:
+        capability = torch.cuda.get_device_capability(0)
+        print(f"torch.cuda.get_device_capability(0)={capability}")
+    except Exception as exc:
+        capability = None
+        print(f"torch.cuda.get_device_capability(0) failed: {exc}")
+    try:
+        arch_list = torch.cuda.get_arch_list()
+    except Exception as exc:
+        arch_list = []
+        print(f"torch.cuda.get_arch_list() failed: {exc}")
+    else:
+        print(f"torch.cuda.get_arch_list()={arch_list}")
+
+    if capability is not None:
+        major, minor = capability
+        exact_arch = f"sm_{major}{minor}"
+        binary_compatible_arch = f"sm_{major}0"
+        if exact_arch not in arch_list and binary_compatible_arch not in arch_list:
+            print(
+                "PyTorch CUDA arch mismatch: "
+                f"GPU requires {exact_arch}, installed wheel provides {arch_list}"
+            )
+            sys.exit(3)
+
+ct2_cuda_count = ctranslate2.get_cuda_device_count()
+print(f"ctranslate2.get_cuda_device_count()={ct2_cuda_count}")
+
+if torch.cuda.is_available() and ct2_cuda_count == 0:
+    sys.exit(2)
+PY
+) || CT2_VALIDATE_STATUS=$?
+    printf '%s\n' "$CT2_VALIDATE_OUTPUT"
+
+    if [[ "$CT2_VALIDATE_STATUS" -eq 2 ]]; then
+        warn "PyTorch can see an NVIDIA GPU, but CTranslate2 cannot. faster-whisper will fall back to CPU."
+        warn "This usually means the installed ctranslate2 wheel is CPU-only on this machine, even though CUDA is present."
+        warn "CTranslate2 4.7.1 documents GPU wheels for CUDA 12.x, so CUDA-enabled PyTorch alone is not sufficient for faster-whisper."
+    elif [[ "$CT2_VALIDATE_STATUS" -eq 3 ]]; then
+        warn "PyTorch can see the GPU, but the installed wheel does not include kernels for this CUDA architecture."
+        warn "Reinstall torch/torchaudio from a newer PyTorch CUDA index that supports the GPU, then rerun the installer validation."
+    fi
 fi
 
 # ---- Install bitsandbytes ----
