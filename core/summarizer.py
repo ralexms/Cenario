@@ -1,9 +1,147 @@
-import torch
-from transformers import pipeline, TextIteratorStreamer, BitsAndBytesConfig, StoppingCriteria, StoppingCriteriaList
-import gc
+import json
+import math
 import os
 import threading
-import math
+import gc
+import re
+
+import requests
+import torch
+from transformers import pipeline, TextIteratorStreamer, BitsAndBytesConfig, StoppingCriteria, StoppingCriteriaList
+
+
+TRANSFORMERS_SUMMARIZATION_MODELS = [
+    {
+        "id": "Qwen/Qwen2.5-0.5B-Instruct",
+        "label": "Qwen 2.5 0.5B (Fast, Low VRAM)",
+        "description": "Good for quick summaries on modest hardware.",
+    },
+    {
+        "id": "Qwen/Qwen2.5-1.5B-Instruct",
+        "label": "Qwen 2.5 1.5B (Balanced)",
+        "description": "Balanced speed and summary quality.",
+    },
+    {
+        "id": "Qwen/Qwen2.5-3B-Instruct",
+        "label": "Qwen 2.5 3B",
+        "description": "Higher quality with higher VRAM cost.",
+    },
+    {
+        "id": "meta-llama/Llama-3.2-3B-Instruct",
+        "label": "Llama 3.2 3B (Good quality)",
+        "description": "Good quality for general meeting notes.",
+    },
+    {
+        "id": "microsoft/Phi-3.5-mini-instruct",
+        "label": "Phi 3.5 Mini 3.8B (Best quality)",
+        "description": "Default built-in option.",
+        "default": True,
+    },
+]
+
+
+def get_transformers_summary_models():
+    return [dict(model) for model in TRANSFORMERS_SUMMARIZATION_MODELS]
+
+
+def _lmstudio_base_url():
+    return os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234").rstrip("/")
+
+
+def _lmstudio_headers():
+    token = os.environ.get("LM_STUDIO_API_TOKEN", "").strip()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _format_bytes(size_bytes):
+    if not isinstance(size_bytes, (int, float)) or size_bytes <= 0:
+        return None
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size_bytes)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return None
+
+
+def _lmstudio_context_length(model):
+    loaded_instances = model.get("loaded_instances") or []
+    if loaded_instances:
+        config = loaded_instances[0].get("config") or {}
+        if config.get("context_length"):
+            return config["context_length"]
+    return model.get("max_context_length")
+
+
+def list_lmstudio_models(timeout=2):
+    """Return locally available LLM models exposed by LM Studio."""
+    url = f"{_lmstudio_base_url()}/api/v1/models"
+    try:
+        response = requests.get(url, headers=_lmstudio_headers(), timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"LM Studio server is not reachable at {_lmstudio_base_url()}. "
+            "Start the LM Studio Developer server first."
+        ) from exc
+    except ValueError as exc:
+        raise RuntimeError("LM Studio returned an invalid model list response.") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("LM Studio returned an unexpected model list payload.")
+
+    models = []
+    for model in payload.get("models", []):
+        if model.get("type") != "llm":
+            continue
+
+        key = model.get("key")
+        if not key:
+            continue
+
+        context_length = _lmstudio_context_length(model)
+        quant = model.get("quantization") or {}
+        quant_name = quant.get("name")
+        params = model.get("params_string")
+        display_name = model.get("display_name") or key
+        label_bits = [display_name]
+        if params:
+            label_bits.append(params)
+        if quant_name:
+            label_bits.append(quant_name)
+
+        models.append({
+            "id": key,
+            "label": " | ".join(label_bits),
+            "description": model.get("description") or "",
+            "publisher": model.get("publisher"),
+            "architecture": model.get("architecture"),
+            "format": model.get("format"),
+            "params": params,
+            "quantization": quant_name,
+            "size_bytes": model.get("size_bytes"),
+            "size_label": _format_bytes(model.get("size_bytes")),
+            "context_length": context_length,
+            "loaded": bool(model.get("loaded_instances")),
+            "reasoning": ((model.get("capabilities") or {}).get("reasoning") or {}),
+        })
+
+    if not models:
+        raise RuntimeError(
+            "LM Studio is running but did not report any local LLM models."
+        )
+
+    models.sort(key=lambda item: (not item["loaded"], item["label"].lower()))
+    if models:
+        models[0]["default"] = True
+    return models
 
 class StopSignalCriteria(StoppingCriteria):
     def __init__(self, stop_event):
@@ -674,3 +812,197 @@ class Summarizer:
             print(f"Summarization error: {e}")
             self.unload_model()
             raise
+
+
+class LMStudioSummarizer(Summarizer):
+    """Summarization backend that delegates generation to a local LM Studio server."""
+
+    _REQUEST_TIMEOUT = (10, 600)
+
+    def __init__(self, model_id, device="cpu", quantization="none"):
+        super().__init__(model_id=model_id, device=device, quantization=quantization)
+        self.model_info = None
+        self.context_length = 8192
+        self._active_response = None
+
+    def stop(self):
+        super().stop()
+        if self._active_response is not None:
+            try:
+                self._active_response.close()
+            except Exception:
+                pass
+
+    def load_model(self):
+        if self.model_info is not None:
+            return
+
+        print(f"Loading LM Studio model metadata: {self.model_id}...")
+        models = list_lmstudio_models(timeout=5)
+        for model in models:
+            if model["id"] == self.model_id:
+                self.model_info = model
+                self.context_length = model.get("context_length") or 8192
+                print("LM Studio model metadata loaded.")
+                return
+
+        raise RuntimeError(
+            f"LM Studio model not found: {self.model_id}. "
+            "Refresh the model list after loading it in LM Studio."
+        )
+
+    def unload_model(self):
+        self._active_response = None
+        self.model_info = None
+
+    def count_tokens(self, text):
+        """Approximate token count conservatively when tokenizer access is remote."""
+        if not text:
+            return 0
+        normalized = re.sub(r"\s+", " ", text.strip())
+        if not normalized:
+            return 0
+        return max(1, math.ceil(len(normalized) / 3.2))
+
+    def _get_context_budget(self, max_new_tokens):
+        model_budget = self.context_length - max_new_tokens - self._TEMPLATE_OVERHEAD - 512
+        return max(1024, model_budget)
+
+    def _free_kv_cache(self):
+        return
+
+    def _build_request_body(self, system_prompt, user_prompt, max_new_tokens, stream):
+        body = {
+            "model": self.model_id,
+            "system_prompt": system_prompt,
+            "input": user_prompt,
+            "stream": stream,
+            "temperature": 0.6,
+            "top_k": 40,
+            "top_p": 0.9,
+            "repeat_penalty": 1.05,
+            "max_output_tokens": max_new_tokens,
+            "context_length": self.context_length,
+        }
+
+        reasoning = (self.model_info or {}).get("reasoning") or {}
+        allowed_reasoning = reasoning.get("allowed_options") or []
+        if "off" in allowed_reasoning:
+            body["reasoning"] = "off"
+
+        return body
+
+    def _extract_stream_text(self, event_name, payload):
+        if not isinstance(payload, dict):
+            return ""
+
+        for key in ("content", "text", "delta"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+
+        if event_name == "message":
+            return payload.get("content", "") or ""
+
+        if event_name == "message.delta":
+            delta = payload.get("delta")
+            if isinstance(delta, dict):
+                return delta.get("content", "") or ""
+
+        return ""
+
+    def _stream_chat(self, body, stream_callback):
+        generated_text = ""
+        event_name = None
+        url = f"{_lmstudio_base_url()}/api/v1/chat"
+
+        try:
+            with requests.post(
+                url,
+                headers=_lmstudio_headers(),
+                json=body,
+                stream=True,
+                timeout=self._REQUEST_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                self._active_response = response
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if self.stop_event.is_set():
+                        raise RuntimeError("Summarization stopped by user")
+                    if raw_line is None:
+                        continue
+
+                    line = raw_line.strip()
+                    if not line:
+                        event_name = None
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event_name = line[6:].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+
+                    payload = json.loads(data)
+                    text = self._extract_stream_text(event_name, payload)
+                    if not text:
+                        continue
+
+                    generated_text += text
+                    stream_callback(text)
+        finally:
+            self._active_response = None
+
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+        return generated_text
+
+    def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+
+        body = self._build_request_body(system_prompt, user_prompt, max_new_tokens, bool(stream_callback))
+
+        try:
+            if stream_callback:
+                return self._stream_chat(body, stream_callback)
+
+            response = requests.post(
+                f"{_lmstudio_base_url()}/api/v1/chat",
+                headers=_lmstudio_headers(),
+                json=body,
+                timeout=self._REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            self._active_response = None
+            raise RuntimeError(
+                f"LM Studio request failed. Check that the local server is running at {_lmstudio_base_url()}."
+            ) from exc
+        except ValueError as exc:
+            self._active_response = None
+            raise RuntimeError("LM Studio returned an invalid inference response.") from exc
+        finally:
+            self._active_response = None
+
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+
+        for key in ("text", "content", "output"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+
+        message = payload.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+
+        raise RuntimeError("LM Studio returned a response without generated text.")

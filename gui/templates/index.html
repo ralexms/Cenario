@@ -801,18 +801,20 @@
             </div>
         </div>
         <div class="row" style="margin-bottom:12px;">
-             <div>
+            <div>
+                <label for="summaryProvider">Provider</label>
+                <select id="summaryProvider" onchange="loadSummaryModels()">
+                    <option value="transformers">Built-in Transformers</option>
+                    <option value="lmstudio">LM Studio</option>
+                </select>
+            </div>
+            <div>
                 <label for="summaryModel">Model</label>
                 <div class="tooltip" style="width:100%">
-                    <select id="summaryModel">
-                        <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen 2.5 0.5B (Fast, Low VRAM)</option>
-                        <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen 2.5 1.5B (Balanced)</option>
-                        <option value="Qwen/Qwen2.5-3B-Instruct">Qwen 2.5 3B</option>
-                        <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B (Good quality)</option>
-                        <option value="microsoft/Phi-3.5-mini-instruct" selected>Phi 3.5 Mini 3.8B (Best quality)</option>
-                    </select>
-                    <span class="tooltiptext">Qwen 0.5B: ~0.5GB, 1.5B: ~1GB, 3B: ~1.7GB<br>Llama 3.2 3B: ~1.8GB<br>Phi 3.5 Mini: ~2.2GB<br>(4-bit quantized)</span>
+                    <select id="summaryModel"><option value="">Loading models...</option></select>
+                    <span id="summaryModelTooltip" class="tooltiptext">Select a summarization provider.</span>
                 </div>
+                <div id="summaryModelHelp" class="info" style="margin-top:4px;"></div>
             </div>
             <div>
                 <label for="summaryDetail">Detail Level</label>
@@ -839,8 +841,9 @@
                         <option value="8">8-bit (Better quality)</option>
                         <option value="none">None (Full precision)</option>
                     </select>
-                    <span class="tooltiptext">4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM</span>
+                    <span id="summaryQuantTooltip" class="tooltiptext">4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM</span>
                 </div>
+                <div id="summaryQuantHelp" class="info" style="margin-top:4px;"></div>
             </div>
             <div>
                 <label for="summaryChunking">Long Text</label>
@@ -903,6 +906,7 @@
     let summaryEventSource = null;
     let postDuration = 0;
     let currentSummaryFile = null;
+    let summaryModelCache = {};
 
     // ---- Theme ----
     function changeTheme(theme) {
@@ -950,6 +954,113 @@
         const defaults = { concise: '1024', detailed: '2048', comprehensive: '4096' };
         const detail = document.getElementById('summaryDetail').value;
         document.getElementById('summaryMaxTokens').placeholder = defaults[detail] || '2048';
+    }
+
+    function updateSummaryProviderUI(providerMeta, hasModels) {
+        const quantSelect = document.getElementById('summaryQuant');
+        const quantHelp = document.getElementById('summaryQuantHelp');
+        const quantTooltip = document.getElementById('summaryQuantTooltip');
+
+        if (providerMeta && providerMeta.supports_quantization) {
+            quantSelect.disabled = false;
+            quantHelp.textContent = '';
+            quantTooltip.innerHTML = '4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM';
+        } else {
+            quantSelect.disabled = true;
+            quantHelp.textContent = hasModels
+                ? 'LM Studio models already include their own quantization/runtime settings.'
+                : '';
+            quantTooltip.textContent = 'LM Studio manages quantization outside Cenario.';
+        }
+    }
+
+    async function loadSummaryModels() {
+        const provider = document.getElementById('summaryProvider').value;
+        const modelSelect = document.getElementById('summaryModel');
+        const modelHelp = document.getElementById('summaryModelHelp');
+        const modelTooltip = document.getElementById('summaryModelTooltip');
+        const summarizeBtn = document.getElementById('btnSummarize');
+        const savedKey = 'cenario_summaryModel_' + provider;
+
+        modelSelect.innerHTML = '<option value="">Loading models...</option>';
+        modelSelect.disabled = true;
+        summarizeBtn.disabled = true;
+        modelHelp.textContent = '';
+        modelTooltip.textContent = 'Loading model list...';
+
+        try {
+            const resp = await fetch('/api/summarize/models?provider=' + encodeURIComponent(provider));
+            const data = await resp.json();
+            const providerMeta = data.provider_meta || null;
+            const models = Array.isArray(data.models) ? data.models : [];
+            summaryModelCache[provider] = models;
+
+            modelSelect.innerHTML = '';
+            if (models.length) {
+                models.forEach(model => {
+                    const opt = document.createElement('option');
+                    opt.value = model.id;
+                    opt.textContent = model.label;
+                    modelSelect.appendChild(opt);
+                });
+
+                const savedModel = localStorage.getItem(savedKey);
+                const defaultModel = models.find(model => model.default) || models[0];
+                const selectedModel = models.find(model => model.id === savedModel) ? savedModel : defaultModel.id;
+                modelSelect.value = selectedModel;
+                modelSelect.disabled = false;
+                summarizeBtn.disabled = false;
+
+                const selectedMeta = models.find(model => model.id === selectedModel) || defaultModel;
+                const helpBits = [];
+                if (selectedMeta.description) helpBits.push(selectedMeta.description);
+                if (selectedMeta.context_length) helpBits.push('Context: ' + selectedMeta.context_length);
+                if (selectedMeta.size_label) helpBits.push('Size: ' + selectedMeta.size_label);
+                if (selectedMeta.loaded) helpBits.unshift('Loaded in LM Studio');
+                modelHelp.textContent = data.error || helpBits.join(' | ');
+                modelTooltip.textContent = selectedMeta.description || selectedMeta.label;
+                localStorage.setItem(savedKey, selectedModel);
+            } else {
+                const empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = provider === 'lmstudio' ? 'No LM Studio models detected' : 'No models available';
+                modelSelect.appendChild(empty);
+                modelSelect.disabled = true;
+                summarizeBtn.disabled = true;
+                modelHelp.textContent = data.error || 'No summarization models are available for this provider.';
+                modelTooltip.textContent = modelHelp.textContent;
+            }
+
+            updateSummaryProviderUI(providerMeta, models.length > 0);
+        } catch (e) {
+            modelSelect.innerHTML = '<option value="">Failed to load models</option>';
+            modelSelect.disabled = true;
+            summarizeBtn.disabled = true;
+            modelHelp.textContent = e.message;
+            modelTooltip.textContent = e.message;
+            updateSummaryProviderUI(null, false);
+        }
+    }
+
+    function updateSummaryModelHelp() {
+        const provider = document.getElementById('summaryProvider').value;
+        const selected = document.getElementById('summaryModel').value;
+        const modelHelp = document.getElementById('summaryModelHelp');
+        const modelTooltip = document.getElementById('summaryModelTooltip');
+        const models = summaryModelCache[provider] || [];
+        const meta = models.find(model => model.id === selected);
+        if (!meta) {
+            return;
+        }
+
+        const helpBits = [];
+        if (meta.description) helpBits.push(meta.description);
+        if (meta.context_length) helpBits.push('Context: ' + meta.context_length);
+        if (meta.size_label) helpBits.push('Size: ' + meta.size_label);
+        if (meta.loaded) helpBits.unshift('Loaded in LM Studio');
+        modelHelp.textContent = helpBits.join(' | ');
+        modelTooltip.textContent = meta.description || meta.label;
+        localStorage.setItem('cenario_summaryModel_' + provider, selected);
     }
 
     function updateLanguageForModel() {
@@ -2137,6 +2248,7 @@
             }
         }
 
+        const provider = document.getElementById('summaryProvider').value;
         const model = document.getElementById('summaryModel').value;
         const detailLevel = document.getElementById('summaryDetail').value;
         const quantization = document.getElementById('summaryQuant').value;
@@ -2145,6 +2257,11 @@
         const maxTokensRaw = document.getElementById('summaryMaxTokens').value;
         const maxTokens = maxTokensRaw ? parseInt(maxTokensRaw) : null;
         const customPrompt = document.getElementById('summaryCustomPrompt').value;
+
+        if (!model) {
+            alert('Select a summarization model first');
+            return;
+        }
 
         const statusDiv = document.getElementById('summaryStatus');
         const outputDiv = document.getElementById('summaryOutput');
@@ -2165,7 +2282,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens, custom_prompt: customPrompt })
+                body: JSON.stringify({ file, provider, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens, custom_prompt: customPrompt })
             });
             const data = await resp.json();
 
@@ -2373,7 +2490,7 @@
         'postComputeType',
         'beamSize',
         'chunkMinutes',
-        'summaryModel',
+        'summaryProvider',
         'summaryDetail',
         'summaryQuant',
         'summaryChunking',
@@ -2413,6 +2530,7 @@
         // Restore dependent visibility
         toggleChunked();
         toggleSummaryChunks();
+        document.getElementById('summaryModel').addEventListener('change', updateSummaryModelHelp);
     }
 
     // ---- System warnings ----
@@ -2453,6 +2571,7 @@
     updateLanguageForModel();
     checkSystemWarnings();
     updateMaxTokensPlaceholder();
+    loadSummaryModels();
 
     // Load persisted folder
     const savedFolder = localStorage.getItem('cenario_outputFolder') || localStorage.getItem('cenario_output_folder');

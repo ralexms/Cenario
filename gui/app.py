@@ -5,8 +5,12 @@ import os
 # Set PyTorch memory allocation configuration to avoid fragmentation
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+import ipaddress
 import sys
 import json
+import socket
+import ssl
+import subprocess
 import wave
 import webbrowser
 import threading
@@ -25,7 +29,12 @@ DATA_DIR = os.environ.get('CENARIO_DATA_DIR', os.path.join(BASE_DIR, 'recordings
 from core.audio_capture import AudioCapture
 from core.transcriber import Transcriber
 from core.exporter import Exporter
-from core.summarizer import Summarizer
+from core.summarizer import (
+    LMStudioSummarizer,
+    Summarizer,
+    get_transformers_summary_models,
+    list_lmstudio_models,
+)
 import updater  # Import the updater module
 
 app = Flask(__name__)
@@ -67,6 +76,216 @@ _summary = {
     'stream_lock': threading.Lock(),
     'summarizer_instance': None # Keep track of the summarizer instance to stop it
 }
+
+SUMMARY_MODEL_PROVIDERS = {
+    'transformers': {
+        'id': 'transformers',
+        'label': 'Built-in Transformers',
+        'supports_quantization': True,
+        'description': 'Loads local Hugging Face / Transformers models directly in Cenario.',
+    },
+    'lmstudio': {
+        'id': 'lmstudio',
+        'label': 'LM Studio',
+        'supports_quantization': False,
+        'description': 'Uses the local LM Studio server and its currently available models.',
+    },
+}
+
+
+def _try_add_ip(ip_values, raw_ip):
+    try:
+        ip_obj = ipaddress.ip_address((raw_ip or '').split('%', 1)[0])
+    except ValueError:
+        return False
+    if ip_obj.is_multicast or ip_obj.is_unspecified:
+        return False
+    ip_values.add(str(ip_obj))
+    return True
+
+
+def _collect_network_identities():
+    """Collect hostnames and IPs that can plausibly reach this server."""
+    dns_names = {'localhost'}
+    ip_values = {'127.0.0.1'}
+    tailscale_dns_names = set()
+    tailscale_ips = set()
+
+    hostname = socket.gethostname().strip()
+    fqdn = socket.getfqdn().strip()
+    if hostname:
+        dns_names.add(hostname)
+    if fqdn:
+        dns_names.add(fqdn)
+
+    for name in list(dns_names):
+        try:
+            infos = socket.getaddrinfo(name, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except Exception:
+            continue
+        for info in infos:
+            _try_add_ip(ip_values, info[4][0])
+
+    for cmd in (
+        ['hostname', '-I'],
+        ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global'],
+        ['ip', '-o', '-6', 'addr', 'show', 'scope', 'global'],
+    ):
+        try:
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except Exception:
+            continue
+        text = proc.stdout.strip()
+        if not text:
+            continue
+        if cmd[:2] == ['hostname', '-I']:
+            for token in text.split():
+                _try_add_ip(ip_values, token)
+        else:
+            for line in text.splitlines():
+                fields = line.split()
+                if 'inet' in fields:
+                    idx = fields.index('inet')
+                elif 'inet6' in fields:
+                    idx = fields.index('inet6')
+                else:
+                    continue
+                if idx + 1 >= len(fields):
+                    continue
+                _try_add_ip(ip_values, fields[idx + 1].split('/', 1)[0])
+
+    try:
+        route = subprocess.run(
+            ['ip', 'route', 'get', '1.1.1.1'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        fields = route.replace('\n', ' ').split()
+        if 'src' in fields:
+            idx = fields.index('src')
+            if idx + 1 < len(fields):
+                _try_add_ip(ip_values, fields[idx + 1])
+    except Exception:
+        pass
+
+    for cmd in (['tailscale', 'ip', '-4'], ['tailscale', 'ip', '-6']):
+        try:
+            out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+        except Exception:
+            continue
+        for line in out.splitlines():
+            token = line.strip()
+            if not token:
+                continue
+            if _try_add_ip(ip_values, token):
+                tailscale_ips.add(token.split('%', 1)[0])
+
+    try:
+        out = subprocess.run(
+            ['tailscale', 'status', '--json'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        status = json.loads(out)
+        self_data = status.get('Self', {})
+        dns_name = (self_data.get('DNSName') or '').strip().rstrip('.')
+        if dns_name:
+            dns_names.add(dns_name)
+            tailscale_dns_names.add(dns_name)
+    except Exception:
+        pass
+
+    for probe in ('8.8.8.8', '1.1.1.1'):
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(0.5)
+            sock.connect((probe, 80))
+            _try_add_ip(ip_values, sock.getsockname()[0])
+        except Exception:
+            pass
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    extra = os.environ.get('CENARIO_TLS_EXTRA_SANS', '').strip()
+    if extra:
+        for item in (x.strip() for x in extra.split(',')):
+            if not item:
+                continue
+            if not _try_add_ip(ip_values, item):
+                dns_names.add(item)
+
+    return {
+        'dns_names': sorted(dns_names),
+        'ip_values': sorted(ip_values, key=lambda v: (':' in v, v)),
+        'tailscale_dns_names': sorted(tailscale_dns_names),
+        'tailscale_ips': sorted(tailscale_ips, key=lambda v: (':' in v, v)),
+    }
+
+
+def _format_url(host, port):
+    if ':' in host and not host.startswith('['):
+        host = f'[{host}]'
+    return f'https://{host}:{port}/'
+
+
+def _print_access_urls(host, port, identities):
+    """Print categorized URLs so remote users pick the right address."""
+    def _uniq(values):
+        seen = set()
+        ordered = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            ordered.append(value)
+        return ordered
+
+    host_is_any = host in {'0.0.0.0', '::', ''}
+    local_hosts = ['localhost', '127.0.0.1']
+    local_urls = [_format_url(value, port) for value in local_hosts]
+
+    if host_is_any:
+        tailscale_hosts = identities['tailscale_dns_names'] + identities['tailscale_ips']
+        lan_hosts = []
+        for value in identities['ip_values']:
+            try:
+                ip_obj = ipaddress.ip_address(value)
+            except ValueError:
+                continue
+            if ip_obj.is_loopback or value in identities['tailscale_ips']:
+                continue
+            lan_hosts.append(value)
+        for name in identities['dns_names']:
+            if name == 'localhost' or name in identities['tailscale_dns_names']:
+                continue
+            lan_hosts.append(name)
+    else:
+        tailscale_hosts = []
+        lan_hosts = [host]
+
+    tailscale_urls = [_format_url(value, port) for value in _uniq(tailscale_hosts)]
+    lan_urls = [_format_url(value, port) for value in _uniq(lan_hosts)]
+
+    print('\nAccess URLs:')
+    print('  Local only:')
+    for url in local_urls:
+        print(f'    {url}')
+    if tailscale_urls:
+        print('  Remote over Tailscale:')
+        for url in tailscale_urls:
+            print(f'    {url}')
+    if lan_urls:
+        print('  Same LAN/VPN only:')
+        for url in lan_urls:
+            print(f'    {url}')
+    print('')
 
 
 def _get_hf_token():
@@ -964,6 +1183,33 @@ def api_speakers_rename():
 
 # ---- Summarization ----
 
+@app.route('/api/summarize/models', methods=['GET'])
+def api_summarize_models():
+    provider = (request.args.get('provider') or 'transformers').strip().lower()
+    provider_meta = SUMMARY_MODEL_PROVIDERS.get(provider)
+    if provider_meta is None:
+        return jsonify({'error': f'Unknown summarization provider: {provider}'}), 400
+
+    try:
+        if provider == 'lmstudio':
+            models = list_lmstudio_models()
+        else:
+            models = get_transformers_summary_models()
+    except Exception as e:
+        return jsonify({
+            'provider': provider,
+            'provider_meta': provider_meta,
+            'models': [],
+            'error': str(e),
+        }), 200
+
+    return jsonify({
+        'provider': provider,
+        'provider_meta': provider_meta,
+        'models': models,
+    })
+
+
 @app.route('/api/summarize/start', methods=['POST'])
 def api_summarize_start():
     if _summary['status'] == 'summarizing':
@@ -971,6 +1217,7 @@ def api_summarize_start():
 
     body = request.get_json(force=True)
     file_path = body.get('file')
+    provider = (body.get('provider') or 'transformers').strip().lower()
     model_id = body.get('model', 'Qwen/Qwen2.5-0.5B-Instruct')
     detail_level = body.get('detail_level', 'concise')
     quantization = body.get('quantization', '4')
@@ -978,6 +1225,9 @@ def api_summarize_start():
     num_chunks = body.get('num_chunks', 2)
     max_new_tokens = body.get('max_new_tokens')  # None = use detail-level default
     custom_prompt = body.get('custom_prompt')
+
+    if provider not in SUMMARY_MODEL_PROVIDERS:
+        return jsonify({'error': f'Unknown summarization provider: {provider}'}), 400
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
@@ -987,7 +1237,15 @@ def api_summarize_start():
     _summary['status'] = 'summarizing'
 
     def run():
-        summarizer = Summarizer(model_id=model_id, quantization=quantization)
+        if provider == 'lmstudio':
+            summarizer = LMStudioSummarizer(model_id=model_id)
+        elif provider == 'transformers':
+            summarizer = Summarizer(model_id=model_id, quantization=quantization)
+        else:
+            _summary['status'] = 'error'
+            _summary['error'] = f'Unknown summarization provider: {provider}'
+            return
+
         _summary['summarizer_instance'] = summarizer
         try:
             # Load transcription based on file type
@@ -1189,142 +1447,6 @@ def _ensure_ssl_cert():
       2. cryptography library
       3. pyopenssl adhoc context (cert regenerated each restart)
     """
-    import ipaddress
-    import socket
-    import ssl
-    import subprocess
-
-    def _try_add_ip(ip_values, raw_ip):
-        try:
-            ip_obj = ipaddress.ip_address((raw_ip or '').split('%', 1)[0])
-        except ValueError:
-            return False
-        if ip_obj.is_multicast or ip_obj.is_unspecified:
-            return False
-        ip_values.add(str(ip_obj))
-        return True
-
-    def _collect_tls_identities():
-        """Collect hostnames/IPs that clients may use to reach this server."""
-        dns_names = {'localhost'}
-        ip_values = {'127.0.0.1'}
-
-        # Include hostname aliases (helpful when clients use host name instead of IP)
-        hostname = socket.gethostname().strip()
-        fqdn = socket.getfqdn().strip()
-        if hostname:
-            dns_names.add(hostname)
-        if fqdn:
-            dns_names.add(fqdn)
-
-        # Resolve all discovered DNS names to IPs
-        for name in list(dns_names):
-            try:
-                infos = socket.getaddrinfo(name, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            except Exception:
-                continue
-            for info in infos:
-                raw = info[4][0]
-                _try_add_ip(ip_values, raw)
-
-        # Fallback: collect interface addresses from common system commands.
-        for cmd in (
-            ['hostname', '-I'],
-            ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global'],
-            ['ip', '-o', '-6', 'addr', 'show', 'scope', 'global'],
-        ):
-            try:
-                proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except Exception:
-                continue
-            text = proc.stdout.strip()
-            if not text:
-                continue
-            if cmd[:2] == ['hostname', '-I']:
-                for token in text.split():
-                    _try_add_ip(ip_values, token)
-            else:
-                for line in text.splitlines():
-                    fields = line.split()
-                    if 'inet' in fields:
-                        idx = fields.index('inet')
-                    elif 'inet6' in fields:
-                        idx = fields.index('inet6')
-                    else:
-                        continue
-                    if idx + 1 >= len(fields):
-                        continue
-                    _try_add_ip(ip_values, fields[idx + 1].split('/', 1)[0])
-
-        # Capture active source IP from routing table (often the exact LAN IP clients use).
-        try:
-            route = subprocess.run(
-                ['ip', 'route', 'get', '1.1.1.1'],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-            fields = route.replace('\n', ' ').split()
-            if 'src' in fields:
-                idx = fields.index('src')
-                if idx + 1 < len(fields):
-                    _try_add_ip(ip_values, fields[idx + 1])
-        except Exception:
-            pass
-
-        # Tailscale: include tailnet IPs and DNS name when available.
-        for cmd in (['tailscale', 'ip', '-4'], ['tailscale', 'ip', '-6']):
-            try:
-                out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-            except Exception:
-                continue
-            for line in out.splitlines():
-                token = line.strip()
-                if not token:
-                    continue
-                _try_add_ip(ip_values, token)
-
-        try:
-            out = subprocess.run(
-                ['tailscale', 'status', '--json'],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-            status = json.loads(out)
-            self_data = status.get('Self', {})
-            dns_name = (self_data.get('DNSName') or '').strip().rstrip('.')
-            if dns_name:
-                dns_names.add(dns_name)
-        except Exception:
-            pass
-
-        # Probe likely outbound interfaces for additional LAN/VPN addresses.
-        for probe in ('8.8.8.8', '1.1.1.1'):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.settimeout(0.5)
-                sock.connect((probe, 80))
-                _try_add_ip(ip_values, sock.getsockname()[0])
-            except Exception:
-                pass
-            finally:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-
-        # Allow manual SAN overrides (comma-separated DNS names and/or IPs)
-        extra = os.environ.get('CENARIO_TLS_EXTRA_SANS', '').strip()
-        if extra:
-            for item in (x.strip() for x in extra.split(',')):
-                if not item:
-                    continue
-                if not _try_add_ip(ip_values, item):
-                    dns_names.add(item)
-
-        return sorted(dns_names), sorted(ip_values, key=lambda v: (':' in v, v))
-
     def _cert_covers_identities(cert_file, expected_dns, expected_ips):
         """Return True when cert SANs include all expected DNS/IP identities."""
         try:
@@ -1351,7 +1473,9 @@ def _ensure_ssl_cert():
     cert_path = os.path.join(cert_dir, 'cert.pem')
     key_path  = os.path.join(cert_dir, 'key.pem')
 
-    dns_names, ip_values = _collect_tls_identities()
+    identities = _collect_network_identities()
+    dns_names = identities['dns_names']
+    ip_values = identities['ip_values']
     san_items = [f'DNS:{name}' for name in dns_names] + [f'IP:{ip}' for ip in ip_values]
     san_addext = 'subjectAltName=' + ','.join(san_items)
 
@@ -1449,8 +1573,10 @@ if __name__ == '__main__':
     host = os.environ.get('CENARIO_HOST', '0.0.0.0')
     port = int(os.environ.get('CENARIO_PORT', 5000))
     debug = os.environ.get('CENARIO_DEBUG', '0') == '1'
+    identities = _collect_network_identities()
 
     ssl_context = _ensure_ssl_cert()
+    _print_access_urls(host, port, identities)
 
     if not os.environ.get('CENARIO_NO_BROWSER'):
         def _open_browser():
