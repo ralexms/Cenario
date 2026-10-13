@@ -31,9 +31,11 @@ from core.transcriber import Transcriber
 from core.exporter import Exporter
 from core.summarizer import (
     LMStudioSummarizer,
+    OpenAICompatibleSummarizer,
     Summarizer,
     get_transformers_summary_models,
     list_lmstudio_models,
+    list_openai_models,
 )
 import updater  # Import the updater module
 
@@ -89,6 +91,12 @@ SUMMARY_MODEL_PROVIDERS = {
         'label': 'LM Studio',
         'supports_quantization': False,
         'description': 'Uses the local LM Studio server and its currently available models.',
+    },
+    'openai': {
+        'id': 'openai',
+        'label': 'OpenAI-compatible API',
+        'supports_quantization': False,
+        'description': 'Uses any server implementing the OpenAI API (OpenAI, Ollama, vLLM, llama.cpp, OpenRouter, ...).',
     },
 }
 
@@ -1193,6 +1201,11 @@ def api_summarize_models():
     try:
         if provider == 'lmstudio':
             models = list_lmstudio_models()
+        elif provider == 'openai':
+            models = list_openai_models(
+                request.args.get('base_url', ''),
+                request.headers.get('X-OpenAI-API-Key', ''),
+            )
         else:
             models = get_transformers_summary_models()
     except Exception as e:
@@ -1225,12 +1238,17 @@ def api_summarize_start():
     num_chunks = body.get('num_chunks', 2)
     max_new_tokens = body.get('max_new_tokens')  # None = use detail-level default
     custom_prompt = body.get('custom_prompt')
+    openai_base_url = (body.get('openai_base_url') or '').strip()
+    openai_api_key = body.get('openai_api_key') or ''
 
     if provider not in SUMMARY_MODEL_PROVIDERS:
         return jsonify({'error': f'Unknown summarization provider: {provider}'}), 400
 
     if not file_path or not os.path.exists(file_path):
         return jsonify({'error': f'File not found: {file_path}'}), 400
+
+    if provider == 'openai' and not openai_base_url:
+        return jsonify({'error': 'Enter a base URL for the OpenAI-compatible API'}), 400
 
     _reset_summary_state()
     _summary['file'] = file_path
@@ -1239,6 +1257,8 @@ def api_summarize_start():
     def run():
         if provider == 'lmstudio':
             summarizer = LMStudioSummarizer(model_id=model_id)
+        elif provider == 'openai':
+            summarizer = OpenAICompatibleSummarizer(model_id=model_id, base_url=openai_base_url, api_key=openai_api_key)
         elif provider == 'transformers':
             summarizer = Summarizer(model_id=model_id, quantization=quantization)
         else:

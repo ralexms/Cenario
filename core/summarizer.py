@@ -143,6 +143,72 @@ def list_lmstudio_models(timeout=2):
         models[0]["default"] = True
     return models
 
+
+def _normalize_openai_base_url(base_url):
+    base_url = (base_url or "").strip().rstrip("/")
+    if not base_url:
+        raise RuntimeError("Enter the base URL of the OpenAI-compatible API (e.g. http://localhost:8000/v1).")
+    if not base_url.startswith(("http://", "https://")):
+        base_url = "http://" + base_url
+    return base_url
+
+
+def _openai_headers(api_key):
+    headers = {"Content-Type": "application/json"}
+    api_key = (api_key or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _openai_context_length(model):
+    # Not part of the OpenAI spec, but several compatible servers report it.
+    for key in ("context_length", "max_model_len", "context_window", "max_context_length"):
+        value = model.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def list_openai_models(base_url, api_key="", timeout=5):
+    """Return the models exposed by an OpenAI-compatible /models endpoint."""
+    base_url = _normalize_openai_base_url(base_url)
+    url = f"{base_url}/models"
+    try:
+        response = requests.get(url, headers=_openai_headers(api_key), timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        raise RuntimeError(f"OpenAI-compatible API at {base_url} returned HTTP {status} when listing models.") from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"OpenAI-compatible API is not reachable at {base_url}.") from exc
+    except ValueError as exc:
+        raise RuntimeError("OpenAI-compatible API returned an invalid model list response.") from exc
+
+    entries = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        raise RuntimeError("OpenAI-compatible API returned an unexpected model list payload.")
+
+    models = []
+    for model in entries:
+        if not isinstance(model, dict) or not model.get("id"):
+            continue
+        context_length = _openai_context_length(model)
+        models.append({
+            "id": model["id"],
+            "label": model.get("name") or model["id"],
+            "description": model.get("owned_by") or "",
+            "context_length": context_length,
+        })
+
+    if not models:
+        raise RuntimeError(f"OpenAI-compatible API at {base_url} did not report any models.")
+
+    models.sort(key=lambda item: item["label"].lower())
+    models[0]["default"] = True
+    return models
+
 class StopSignalCriteria(StoppingCriteria):
     def __init__(self, stop_event):
         self.stop_event = stop_event
@@ -605,8 +671,10 @@ class Summarizer:
 
              # When user forces num_chunks, we respect it up to the model's hard limit,
              # ignoring the VRAM estimation which might be too conservative.
-             config = self.pipe.model.config
-             model_max = getattr(config, 'max_position_embeddings', 32768)
+             if self.pipe is not None:
+                 model_max = getattr(self.pipe.model.config, 'max_position_embeddings', 32768)
+             else:
+                 model_max = getattr(self, 'context_length', 8192)
              model_hard_limit = model_max - max_new_tokens - self._TEMPLATE_OVERHEAD - 512 - 60
 
              # We use the smaller of the calculated size or the hard model limit
@@ -1006,3 +1074,118 @@ class LMStudioSummarizer(Summarizer):
                 return content
 
         raise RuntimeError("LM Studio returned a response without generated text.")
+
+
+class OpenAICompatibleSummarizer(LMStudioSummarizer):
+    """Summarization backend for any server implementing the OpenAI chat completions API."""
+
+    def __init__(self, model_id, base_url, api_key="", device="cpu", quantization="none"):
+        super().__init__(model_id=model_id, device=device, quantization=quantization)
+        self.base_url = _normalize_openai_base_url(base_url)
+        self.api_key = api_key or ""
+
+    def load_model(self):
+        if self.model_info is not None:
+            return
+
+        print(f"Loading OpenAI-compatible model metadata: {self.model_id}...")
+        try:
+            models = list_openai_models(self.base_url, self.api_key)
+        except RuntimeError as exc:
+            # Some providers don't implement /models; generation may still work.
+            print(f"Could not list models ({exc}); continuing with defaults.")
+            models = []
+
+        self.model_info = next((m for m in models if m["id"] == self.model_id), {"id": self.model_id})
+        self.context_length = self.model_info.get("context_length") or 8192
+
+    def _build_request_body(self, system_prompt, user_prompt, max_new_tokens, stream):
+        return {
+            "model": self.model_id,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": stream,
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "max_tokens": max_new_tokens,
+        }
+
+    def _request_error(self, exc):
+        detail = ""
+        response = getattr(exc, "response", None)
+        if response is not None:
+            detail = f" (HTTP {response.status_code}: {response.text[:300]})"
+        return RuntimeError(f"OpenAI-compatible API request to {self.base_url} failed{detail}.")
+
+    def _stream_chat(self, body, stream_callback):
+        generated_text = ""
+        try:
+            with requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=_openai_headers(self.api_key),
+                json=body,
+                stream=True,
+                timeout=self._REQUEST_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                self._active_response = response
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if self.stop_event.is_set():
+                        raise RuntimeError("Summarization stopped by user")
+                    line = (raw_line or "").strip()
+                    if not line.startswith("data:"):
+                        continue
+
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+
+                    payload = json.loads(data)
+                    for choice in payload.get("choices") or []:
+                        text = (choice.get("delta") or {}).get("content")
+                        if text:
+                            generated_text += text
+                            stream_callback(text)
+        except requests.RequestException as exc:
+            if self.stop_event.is_set():
+                raise RuntimeError("Summarization stopped by user") from exc
+            raise self._request_error(exc) from exc
+        finally:
+            self._active_response = None
+
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+        return generated_text
+
+    def _summarize_single(self, system_prompt, user_prompt, max_new_tokens, stream_callback=None):
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+
+        body = self._build_request_body(system_prompt, user_prompt, max_new_tokens, bool(stream_callback))
+        if stream_callback:
+            return self._stream_chat(body, stream_callback)
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=_openai_headers(self.api_key),
+                json=body,
+                timeout=self._REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as exc:
+            raise self._request_error(exc) from exc
+        except ValueError as exc:
+            raise RuntimeError("OpenAI-compatible API returned an invalid response.") from exc
+
+        if self.stop_event.is_set():
+            raise RuntimeError("Summarization stopped by user")
+
+        choices = payload.get("choices") or []
+        content = ((choices[0].get("message") or {}).get("content")) if choices else None
+        if not isinstance(content, str):
+            raise RuntimeError("OpenAI-compatible API returned a response without generated text.")
+        return content

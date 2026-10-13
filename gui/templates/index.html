@@ -806,6 +806,7 @@
                 <select id="summaryProvider" onchange="loadSummaryModels()">
                     <option value="transformers">Built-in Transformers</option>
                     <option value="lmstudio">LM Studio</option>
+                    <option value="openai">OpenAI-compatible API</option>
                 </select>
             </div>
             <div>
@@ -829,6 +830,29 @@
                 <div class="tooltip" style="width:100%">
                     <input type="number" id="summaryMaxTokens" placeholder="2048" min="128" max="8192" step="128">
                     <span class="tooltiptext">Max tokens the model can generate.<br>Leave empty to use detail-level default:<br>Concise: 1024, Detailed: 2048, Comprehensive: 4096</span>
+                </div>
+            </div>
+        </div>
+        <div id="summaryOpenAIGroup" class="row hidden" style="margin-bottom:12px;">
+            <div>
+                <label for="summaryOpenAIBaseUrl">Base URL</label>
+                <div class="tooltip" style="width:100%">
+                    <input type="text" id="summaryOpenAIBaseUrl" placeholder="https://api.openai.com/v1" onchange="loadSummaryModels()">
+                    <span class="tooltiptext">Root of the OpenAI-compatible API, usually ending in /v1.<br>e.g. http://localhost:11434/v1 (Ollama), http://localhost:8000/v1 (vLLM)</span>
+                </div>
+            </div>
+            <div>
+                <label for="summaryOpenAIApiKey">API Key</label>
+                <div class="tooltip" style="width:100%">
+                    <input type="password" id="summaryOpenAIApiKey" placeholder="Optional" autocomplete="off" onchange="loadSummaryModels()">
+                    <span class="tooltiptext">Leave empty for local servers that don't require authentication.</span>
+                </div>
+            </div>
+            <div>
+                <label for="summaryOpenAIModelManual">Model Name Override</label>
+                <div class="tooltip" style="width:100%">
+                    <input type="text" id="summaryOpenAIModelManual" placeholder="Optional" oninput="updateSummarizeButtonState()">
+                    <span class="tooltiptext">Use this model name instead of the list selection.<br>Useful when the server doesn't list models.</span>
                 </div>
             </div>
         </div>
@@ -967,11 +991,23 @@
             quantTooltip.innerHTML = '4-bit: ~4x less VRAM, minimal quality loss<br>8-bit: ~2x less VRAM, near-lossless<br>None: Full float16, needs most VRAM';
         } else {
             quantSelect.disabled = true;
+            const providerName = providerMeta ? providerMeta.label : 'The external server';
             quantHelp.textContent = hasModels
-                ? 'LM Studio models already include their own quantization/runtime settings.'
+                ? providerName + ' models already include their own quantization/runtime settings.'
                 : '';
-            quantTooltip.textContent = 'LM Studio manages quantization outside Cenario.';
+            quantTooltip.textContent = providerName + ' manages quantization outside Cenario.';
         }
+    }
+
+    function getSummaryModelId() {
+        const provider = document.getElementById('summaryProvider').value;
+        const manual = document.getElementById('summaryOpenAIModelManual').value.trim();
+        if (provider === 'openai' && manual) return manual;
+        return document.getElementById('summaryModel').value;
+    }
+
+    function updateSummarizeButtonState() {
+        document.getElementById('btnSummarize').disabled = !getSummaryModelId();
     }
 
     async function loadSummaryModels() {
@@ -981,6 +1017,8 @@
         const modelTooltip = document.getElementById('summaryModelTooltip');
         const summarizeBtn = document.getElementById('btnSummarize');
         const savedKey = 'cenario_summaryModel_' + provider;
+        const isOpenAI = provider === 'openai';
+        document.getElementById('summaryOpenAIGroup').classList.toggle('hidden', !isOpenAI);
 
         modelSelect.innerHTML = '<option value="">Loading models...</option>';
         modelSelect.disabled = true;
@@ -989,7 +1027,14 @@
         modelTooltip.textContent = 'Loading model list...';
 
         try {
-            const resp = await fetch('/api/summarize/models?provider=' + encodeURIComponent(provider));
+            let url = '/api/summarize/models?provider=' + encodeURIComponent(provider);
+            const headers = {};
+            if (isOpenAI) {
+                url += '&base_url=' + encodeURIComponent(document.getElementById('summaryOpenAIBaseUrl').value.trim());
+                const apiKey = document.getElementById('summaryOpenAIApiKey').value.trim();
+                if (apiKey) headers['X-OpenAI-API-Key'] = apiKey;
+            }
+            const resp = await fetch(url, { headers });
             const data = await resp.json();
             const providerMeta = data.provider_meta || null;
             const models = Array.isArray(data.models) ? data.models : [];
@@ -1026,7 +1071,7 @@
                 empty.textContent = provider === 'lmstudio' ? 'No LM Studio models detected' : 'No models available';
                 modelSelect.appendChild(empty);
                 modelSelect.disabled = true;
-                summarizeBtn.disabled = true;
+                updateSummarizeButtonState();
                 modelHelp.textContent = data.error || 'No summarization models are available for this provider.';
                 modelTooltip.textContent = modelHelp.textContent;
             }
@@ -1035,7 +1080,7 @@
         } catch (e) {
             modelSelect.innerHTML = '<option value="">Failed to load models</option>';
             modelSelect.disabled = true;
-            summarizeBtn.disabled = true;
+            updateSummarizeButtonState();
             modelHelp.textContent = e.message;
             modelTooltip.textContent = e.message;
             updateSummaryProviderUI(null, false);
@@ -2249,7 +2294,7 @@
         }
 
         const provider = document.getElementById('summaryProvider').value;
-        const model = document.getElementById('summaryModel').value;
+        const model = getSummaryModelId();
         const detailLevel = document.getElementById('summaryDetail').value;
         const quantization = document.getElementById('summaryQuant').value;
         const chunking = document.getElementById('summaryChunking').value;
@@ -2282,7 +2327,7 @@
             const resp = await fetch('/api/summarize/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file, provider, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens, custom_prompt: customPrompt })
+                body: JSON.stringify({ file, provider, model, detail_level: detailLevel, quantization, chunking, num_chunks: numChunks, max_new_tokens: maxTokens, custom_prompt: customPrompt, openai_base_url: document.getElementById('summaryOpenAIBaseUrl').value.trim(), openai_api_key: document.getElementById('summaryOpenAIApiKey').value.trim() })
             });
             const data = await resp.json();
 
@@ -2491,6 +2536,9 @@
         'beamSize',
         'chunkMinutes',
         'summaryProvider',
+        'summaryOpenAIBaseUrl',
+        'summaryOpenAIApiKey',
+        'summaryOpenAIModelManual',
         'summaryDetail',
         'summaryQuant',
         'summaryChunking',
